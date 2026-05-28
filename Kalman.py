@@ -8,7 +8,7 @@ from scipy.spatial.transform import Rotation as R
 import config  
 from st_log_reader import STLogReader
 from visualization import TrajectoryVisualizer
-from filters import FilterpyESKF
+from filters import FilterpyESKF15
 
 class IMUCalibration:
     def __init__(self, acc_json_path, gyro_json_path):
@@ -115,14 +115,16 @@ def main():
         q_init = R.from_quat([0, 0, 0, 1]) 
 
     # Kalman Filter Start 
-    eskf = FilterpyESKF(
-        initial_pos=[0.0, 0.0, 0.0], 
-        gyro_noise_std=calib.gyro_noise_std,
-        accel_noise=config.ACCEL_NOISE_DENSITY,
-        grav_unc=config.GRAVITY_UNCERTAINTY,
-        zupt_unc=config.ZUPT_UNCERTAINTY
+    eskf = FilterpyESKF15( 
+        initial_pos = [0.0, 0.0, 0.0], 
+        initial_q = q_init, 
+        gyro_noise_std = calib.gyro_noise_std,
+        accel_noise = config.ACCEL_NOISE_DENSITY,
+        bg_rw = config.GYRO_BIAS_RW, 
+        ba_rw = config.ACCEL_BIAS_RW, 
+        grav_unc = config.GRAVITY_UNCERTAINTY,
+        zupt_unc = config.ZUPT_UNCERTAINTY
     )
-    eskf.q = q_init 
     
     positions = []
     orientations = [] 
@@ -176,6 +178,8 @@ def main():
         visualizer_main.plot_raw_sensor_data(df_imu)
 
     visualizer_main.show_all()
+    print(eskf.bg)
+    print(eskf.ba)
 
 if __name__ == "__main__":
     main()
