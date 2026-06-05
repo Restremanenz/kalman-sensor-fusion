@@ -1,7 +1,7 @@
 # ==========================================
 # DATEI- UND PFADEINSTELLUNGEN
 # ==========================================
-LOG_FOLDER = "./Data/1m1"
+LOG_FOLDER = "./Data/2m2"
 ACCEL_CALIB_FILE = "acc_param.json"
 GYRO_CALIB_FILE = "gyro_bias.json"
 
@@ -62,3 +62,4 @@ ANIMATION_FPS = 30
 SHOW_RAW_SENSOR_DATA = True
 SHOW_VELOCITY = True   
 SHOW_ALTITUDE = True        
+SHOW_INIT_PLOT = False
