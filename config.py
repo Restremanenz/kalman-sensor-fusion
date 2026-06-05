@@ -1,7 +1,7 @@
 # ==========================================
 # DATEI- UND PFADEINSTELLUNGEN
 # ==========================================
-LOG_FOLDER = "./Data/lena4"
+LOG_FOLDER = "./Data/2m1"
 ACCEL_CALIB_FILE = "acc_param.json"
 GYRO_CALIB_FILE = "gyro_bias.json"
 
@@ -15,6 +15,13 @@ MIN_STILL_SECONDS = 0.1        # Ruhesekunden
 # ==========================================
 # KALMAN FILTER TUNING 
 # ==========================================
+USE_ZUPT = True
+
+# Barometer Tuning
+BARO_UNCERTAINTY = 0.5         # (m) Messrauschen des Barometers
+USE_BARO_PRE_FILTER = True     # Zero-Phase Filter für Barometer
+BARO_CUTOFF_HZ = 1           
+
 # Prozessrauschen (Q): IMU-Integration
 ACCEL_NOISE_DENSITY = 0.01      # (m/s^2) Je höher, desto mehr vertraut der Filter auf externe Updates
 
@@ -28,11 +35,12 @@ ACCEL_BIAS_RW = 1e-4           # Wie schnell darf sich der Accel-Bias ändern?
 GYRO_BIAS_RW = 1e-5            # Wie schnell darf sich der Gyro-Bias ändern?
 
 # Heuristik-Schwellenwerte
-ZUPT_THRESHOLD_MS2 = 0.09       # Stehend
+ZUPT_THRESHOLD_MS2 = 0.2       # Stehend
 
 # ==========================================
 # VISUALISIERUNG
 # ==========================================
 ANIMATION_FPS = 30
 SHOW_RAW_SENSOR_DATA = True
-SHOW_VELOCITY = True           
+SHOW_VELOCITY = True   
+SHOW_ALTITUDE = True        

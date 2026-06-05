@@ -9,7 +9,7 @@ class FilterpyESKF15:
     Error:   d_Pos(3), d_Vel(3), d_Theta(3), d_ba(3), d_bg(3) = 15 Dimensionen
     """
 
-    def __init__(self, initial_pos, initial_q, gyro_noise_std, accel_noise, bg_rw, ba_rw, grav_unc, zupt_unc):
+    def __init__(self, initial_pos, initial_q, gyro_noise_std, accel_noise, bg_rw, ba_rw, grav_unc, zupt_unc, baro_unc):
         self.p = np.array(initial_pos, dtype=float)
         self.v = np.zeros(3)
         self.q = initial_q
@@ -34,6 +34,21 @@ class FilterpyESKF15:
 
         self.R_grav = np.eye(3) * (grav_unc)**2  
         self.R_zupt = np.eye(3) * (zupt_unc)**2
+        self.R_baro = np.eye(3) * 1e8          # Unendlich hohes Rauschen für X und Y
+        self.R_baro[2, 2] = baro_unc**2        # Echtes (niedriges) Rauschen für Z
+
+    def update_barometer(self, baro_z):
+        """Update der Z-Achse durch das Barometer (3D Padding für FilterPy)."""
+        # H-Matrix muss nun 3 Zeilen (für 3D-Messung) und 15 Spalten haben
+        H = np.zeros((3, 15))
+        H[2, 2] = 1.0  # Wir mappen nur die Z-Position (Index 2) auf die Z-Messung (Reihe 2)
+        
+        # Innovation (Messung - Vorhersage)
+        # X und Y setzen wir Nullen (werden vom Filter wegen R=1e8 komplett ignoriert)
+        innovation = np.array([0.0, 0.0, baro_z - self.p[2]])
+        
+        self.kf.update(z=innovation, R=self.R_baro, H=H)
+        self._inject_error_and_reset()
 
     def predict(self, acc_meas, gyro_meas, dt):
         """Koppelnavigation und Fehlerpropagierung mit Bias-Kompensation."""

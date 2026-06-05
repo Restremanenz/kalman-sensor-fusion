@@ -3,6 +3,7 @@ import sys
 import json
 import numpy as np
 import pandas as pd
+from scipy.signal import butter, filtfilt
 from scipy.spatial.transform import Rotation as R
 
 import config  
@@ -30,6 +31,15 @@ class IMUCalibration:
         calibrated_dps = raw_gyro - self.gyro_bias
         return calibrated_dps * (np.pi / 180.0)
 
+def apply_zero_phase_filter(data, cutoff, fs, order=4):
+    """Wendet einen Zero-Phase Butterworth Low-Pass Filter an, optimiert für IMU-Transienten."""
+    nyq = 0.5 * fs
+    normal_cutoff = cutoff / nyq
+    b, a = butter(order, normal_cutoff, btype='low', analog=False)
+    
+    # Verhindert das "Ringing" am Anfang und Ende des Datensatzes
+    padlen = min(3 * max(len(a), len(b)), len(data) - 1)
+    return filtfilt(b, a, data, padtype='even', padlen=padlen)
 
 def main():
     # 1. Daten laden (Pfade kommen aus der Config)
@@ -48,10 +58,36 @@ def main():
     df_acc = reader.get_sensor_data("lsm6dsv16x_acc")
     df_gyro = reader.get_sensor_data("lsm6dsv16x_gyro")
 
-    df_acc = df_acc.sort_values("Time")
-    df_gyro = df_gyro.sort_values("Time")
+    # 1.5 Barometer Daten laden
+    baro_info = reader.get_sensor_info("lps22df_press")
+    fs_baro = baro_info.get("measured_odr_hz", 25.0) if baro_info else 25.0
+    print(fs_baro)
+    
+# Alle Sensordaten laden und direkt nach Zeit sortieren
+    df_acc = reader.get_sensor_data("lsm6dsv16x_acc").sort_values("Time")
+    df_gyro = reader.get_sensor_data("lsm6dsv16x_gyro").sort_values("Time")
+    df_baro = reader.get_sensor_data("lps22df_press").sort_values("Time")
+
+    # 1.5 Barometer Setup
+    baro_info = reader.get_sensor_info("lps22df_press")
+    fs_baro = baro_info.get("measured_odr_hz", 25.0) if baro_info else 25.0
+    print(f"Barometer ODR erkannt: {fs_baro} Hz")
+
+    # Automatische Spaltenerkennung (Löst das Problem mit 'PRESS' vs 'Press')
+    original_press_col = [col for col in df_baro.columns if col != 'Time'][0]
+    df_baro = df_baro.rename(columns={original_press_col: 'PRESS [hPa]'})
+    
+    # Trigger-Timestamp für den Kalman Filter speichern
+    df_baro['Baro_Time'] = df_baro['Time'] 
+    
+    # --- MERGING (Streng nacheinander!) ---
+    # 1. Accel und Gyro synchronisieren
     df_imu = pd.merge_asof(df_acc, df_gyro, on="Time", direction="nearest")
+    
+    # 2. Barometer asynchron anhängen
+    df_imu = pd.merge_asof(df_imu, df_baro, on="Time", direction="backward")
     df_imu = df_imu.reset_index(drop=True)
+    # --------------------------------------
     
     # 2. Initialisierung (Steuerung über Config)
     if config.USE_AUTO_INIT:
@@ -108,11 +144,40 @@ def main():
             q_init = R.from_rotvec(axis * angle)
         else:
             q_init = R.from_quat([0,0,0,1])
-            
+
+    # Basisdruck P0 aus der Ruhephase berechnen
+        P0 = df_init['PRESS [hPa]'].mean()
+        print(f"Kalibrierter Basisdruck P0: {P0:.2f} hPa")
+
     else:
         print("Automatische Initialisierung DEAKTIVIERT. Starte ab Beginn.")
         init_end_idx = 1 
         q_init = R.from_quat([0, 0, 0, 1]) 
+        P0 = df_imu['PRESS [hPa]'].iloc[0] 
+        
+    # =========================================================
+    # BAROMETER: HÖHENBERECHNUNG & ZERO-PHASE FILTER
+    # =========================================================
+    # Internationale barometrische Höhenformel (relativ zu P0)
+    df_imu['Altitude [m]'] = 44330.0 * (1.0 - (df_imu['PRESS [hPa]'] / P0)**(1 / 5.255))
+    
+    # Filtern des Höhensignals (Extrem wichtig für saubere Z-Updates!)
+    if config.USE_BARO_PRE_FILTER:
+        print(f"Wende Zero-Phase Filter auf Barometer an (Cutoff: {config.BARO_CUTOFF_HZ}Hz)...")
+        # Wir filtern direkt die resultierende Höhenkurve
+        df_imu['Altitude_filt [m]'] = apply_zero_phase_filter(
+            df_imu['Altitude [m]'].values, 
+            cutoff=config.BARO_CUTOFF_HZ, 
+            fs=fs_dynamisch, 
+            order=2
+        )
+    else:
+        df_imu['Altitude_filt [m]'] = df_imu['Altitude [m]']
+
+    # Wir zwingen die Starthöhe am Beginn des Koppelnavigations-Loops exakt auf 0.0m
+    start_altitude = df_imu['Altitude_filt [m]'].iloc[init_end_idx]
+    df_imu['Altitude_filt [m]'] -= start_altitude
+    df_imu['Altitude [m]'] -= start_altitude # (Optional: auch Rohdaten für den Plot nullen)
 
     # Kalman Filter Start 
     eskf = FilterpyESKF15( 
@@ -123,7 +188,8 @@ def main():
         bg_rw = config.GYRO_BIAS_RW, 
         ba_rw = config.ACCEL_BIAS_RW, 
         grav_unc = config.GRAVITY_UNCERTAINTY,
-        zupt_unc = config.ZUPT_UNCERTAINTY
+        zupt_unc = config.ZUPT_UNCERTAINTY,
+        baro_unc = config.BARO_UNCERTAINTY
     )
     
     positions = []
@@ -132,7 +198,9 @@ def main():
     velocities = []
     times_plot = []
     
-    # 4. Koppelnavigation
+# 4. Koppelnavigation
+    last_baro_time = -1.0 # Trigger-Variable
+    
     for i in range(init_end_idx, len(df_imu)):
         dt = times[i] - times[i-1]
         if dt <= 0: continue
@@ -145,20 +213,68 @@ def main():
         acc_calib = calib.calibrate_acc(raw_acc)
         gyro_calib = calib.calibrate_gyro(raw_gyro)
         
+        # 1. Koppelnavigation (Prediction)
         eskf.predict(acc_calib, gyro_calib, dt)
         
+        # 2. BAROMETER UPDATE (Asynchroner Trigger)
+        current_baro_time = row['Baro_Time']
+        if pd.notna(current_baro_time) and current_baro_time != last_baro_time:
+            baro_z = row['Altitude_filt [m]']
+            eskf.update_barometer(baro_z)
+            last_baro_time = current_baro_time
+
+        # 3. ZUPT & GRAVITY UPDATE
         acc_world = eskf.q.apply(acc_calib)
         linear_acc = acc_world + eskf.g
         acc_magnitude = np.linalg.norm(linear_acc)
         
-        if acc_magnitude < config.ZUPT_THRESHOLD_MS2:
-            eskf.update_zupt()
-            eskf.update_gravity(acc_calib)
-            
+        if config.USE_ZUPT:
+            if acc_magnitude < config.ZUPT_THRESHOLD_MS2:
+                eskf.update_zupt()
+                eskf.update_gravity(acc_calib)
+
+        # 4. Daten für Plotting speichern
         positions.append(eskf.p.copy())
         orientations.append(eskf.q)
         velocities.append(eskf.v.copy())
         times_plot.append(times[i])
+
+    # # ---------------------------------------------------------
+    # # POST-PROCESSING: BOUNDARY CONDITION SMOOTHING (Rückwärts-Glättung)
+    # # ---------------------------------------------------------
+    # positions = np.array(positions)
+    # velocities = np.array(velocities)
+    # times_plot = np.array(times_plot)
+    
+    # print("Wende Smoother an (Rückwärts-Drift-Korrektur)...")
+    
+    # # 1. Wir wissen, am Ende des Laufs (am Buzzer / beim Stillstand) MUSS v = 0 sein.
+    # # Alles, was am Ende nicht 0 ist, ist unser aufsummierter Drift.
+    # v_end_error = velocities[-1] - np.array([0.0, 0.0, 0.0]) 
+    # num_samples = len(velocities)
+    
+    # # 2. Wir berechnen, wie viel Fehler pro Zeitschritt entstanden ist
+    # v_drift_rate = v_end_error / num_samples
+    
+    # smoothed_velocities = np.zeros_like(velocities)
+    # smoothed_positions = np.zeros_like(positions)
+    
+    # # 3. Smoother-Schleife: Wir ziehen den Drift rückwirkend ab
+    # for i in range(num_samples):
+    #     # Am Anfang (i=0) wird 0 abgezogen, am Ende (i=num_samples) der volle Fehler
+    #     smoothed_velocities[i] = velocities[i] - (i * v_drift_rate)
+        
+    # # 4. Da die alte Position auf der driftenden Geschwindigkeit basierte,
+    # # berechnen wir die Route aus der nun perfekten Geschwindigkeit komplett neu!
+    # smoothed_positions[0] = positions[0]
+    # for i in range(1, num_samples):
+    #     dt = times_plot[i] - times_plot[i-1]
+    #     smoothed_positions[i] = smoothed_positions[i-1] + smoothed_velocities[i] * dt
+
+    # # Für die Visualisierung ab hier nun die "smoothed_positions" und "smoothed_velocities" verwenden!
+    # positions = smoothed_positions
+    # velocities = smoothed_velocities
+    # # ---------------------------------------------------------    
         
     # 5. Visualisierung
     positions = np.array(positions)
@@ -176,6 +292,9 @@ def main():
 
     if config.SHOW_RAW_SENSOR_DATA:
         visualizer_main.plot_raw_sensor_data(df_imu)
+
+    if getattr(config, 'SHOW_ALTITUDE', False):
+        visualizer_main.plot_altitude(df_imu)
 
     visualizer_main.show_all()
     print(eskf.bg)

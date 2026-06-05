@@ -130,7 +130,30 @@ class TrajectoryVisualizer:
         ax.grid(True, linestyle='--', alpha=0.6)
         
         plt.tight_layout()
+        
+    def plot_altitude(self, df):
+        """Plottet die Barometer-Höhenkurve (Roh vs. Zero-Phase gefiltert)."""
+        fig, ax = plt.subplots(figsize=(12, 5))
 
+        # 1. Rohe berechnete Höhe (aus P [hPa])
+        if 'Altitude [m]' in df.columns:
+            ax.plot(df['Time'], df['Altitude [m]'], color='lightgray', label='Höhe (Roh / Rauschen)', alpha=0.9)
+        
+        # 2. Gefilterte Höhe (Zero-Phase Butterworth)
+        if 'Altitude_filt [m]' in df.columns:
+            ax.plot(df['Time'], df['Altitude_filt [m]'], color='#1f77b4', linewidth=2, label='Höhe (Gefiltert - 2Hz)')
+
+        ax.set_xlabel('Zeit [s]')
+        ax.set_ylabel('Relative Höhe [m]')
+        ax.set_title('Barometer: Berechnetes Höhenprofil')
+        
+        # Schöne y-Achsen-Skalierung (Start ist 0)
+        ax.set_ylim([-1.0, 16.0]) # Speed Klettern geht bis ~15m
+        
+        ax.legend(loc='upper left')
+        ax.grid(True, linestyle='--', alpha=0.6)
+        
+        plt.tight_layout()
     def show_all(self):
         """Öffnet alle vorbereiteten Fenster gleichzeitig."""
         plt.show()
