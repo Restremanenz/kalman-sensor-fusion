@@ -36,12 +36,12 @@ FORCE_V_END_ZERO = True
 USE_ZUPT = True
 
 # Barometer Tuning
-BARO_UNCERTAINTY = 0.5         # (m) Messrauschen des Barometers
+BARO_UNCERTAINTY = 0.25         # (m) Messrauschen des Barometers
 USE_BARO_PRE_FILTER = True     # Zero-Phase Filter für Barometer
 BARO_CUTOFF_HZ = 1.5           
 
 # Prozessrauschen (Q): IMU-Integration
-ACCEL_NOISE_DENSITY = 0.01      # (m/s^2) Je höher, desto mehr vertraut der Filter auf externe Updates
+ACCEL_NOISE_DENSITY = 0.04      # (m/s^2) Je höher, desto mehr vertraut der Filter auf externe Updates
 
 # Messrauschen (R)
 GRAVITY_UNCERTAINTY = 0.5      # (m/s^2) 

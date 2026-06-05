@@ -38,19 +38,6 @@ class FilterpyESKF15:
         self.R_baro[2, 2] = baro_unc**2        # Echtes (niedriges) Rauschen für Z
         self.R_zaru = np.eye(3) * (zaru_unc)**2
 
-    def update_barometer(self, baro_z):
-        """Update der Z-Achse durch das Barometer (3D Padding für FilterPy)."""
-        # H-Matrix muss nun 3 Zeilen (für 3D-Messung) und 15 Spalten haben
-        H = np.zeros((3, 15))
-        H[2, 2] = 1.0  # Wir mappen nur die Z-Position (Index 2) auf die Z-Messung (Reihe 2)
-        
-        # Innovation (Messung - Vorhersage)
-        # X und Y setzen wir Nullen (werden vom Filter wegen R=1e8 komplett ignoriert)
-        innovation = np.array([0.0, 0.0, baro_z - self.p[2]])
-        
-        self.kf.update(z=innovation, R=self.R_baro, H=H)
-        self._inject_error_and_reset()
-
     def predict(self, acc_meas, gyro_meas, dt):
         """Koppelnavigation und Fehlerpropagierung mit Bias-Kompensation."""
         # Wahre Sensorwerte durch Abzug des geschätzten In-Run Bias
@@ -102,14 +89,38 @@ class FilterpyESKF15:
         
         self.kf.x = np.zeros(15)
 
+    def _robust_update(self, z, H, R):
+        """
+        Führt ein numerisch stabiles Kalman-Update durch (Joseph-Form + Symmetrisierung).
+        Verhindert, dass die Kovarianzmatrix (P) durch Rundungsfehler nach 10.000 Iterationen implodiert.
+        """
+        # 1. Alte Kovarianzmatrix VOR dem Update sichern
+        P_prior = self.kf.P.copy()
+        
+        # 2. Standard-Update (berechnet den neuen Fehler-Zustand und den Kalman-Gain K)
+        self.kf.update(z=z, R=R, H=H)
+        
+        # 3. Joseph-Form für die Kovarianzmatrix anwenden
+        # Formel: P = (I - KH) * P_prior * (I - KH)^T + K * R * K^T
+        I = np.eye(15)  # 15 Zustände in deinem ESKF
+        K = self.kf.K
+        
+        I_KH = I - (K @ H)
+        P_joseph = (I_KH @ P_prior @ I_KH.T) + (K @ R @ K.T)
+        
+        # 4. Symmetrie erzwingen (verhindert negative Eigenwerte durch Fließkomma-Ungenauigkeiten)
+        self.kf.P = 0.5 * (P_joseph + P_joseph.T)
+        
+        # 5. Zuletzt den berechneten Error-State in die globale Position injizieren und nullen
+        self._inject_error_and_reset()
+
     def update_zupt(self):
         """Zero Velocity Update (Geschwindigkeit = 0)."""
         H = np.zeros((3, 15))
         H[0:3, 3:6] = np.eye(3) 
         
         innovation = np.array([0.0, 0.0, 0.0]) - self.v
-        self.kf.update(z=innovation, R=self.R_zupt, H=H)
-        self._inject_error_and_reset()
+        self._robust_update(z=innovation, H=H, R=self.R_zupt)
 
     def update_zaru(self, gyro_meas):
         """
@@ -124,8 +135,19 @@ class FilterpyESKF15:
         gyro_true = gyro_meas - self.bg
         innovation = np.array([0.0, 0.0, 0.0]) - gyro_true
         
-        self.kf.update(z=innovation, R=self.R_zaru, H=H)
-        self._inject_error_and_reset()
+        self._robust_update(z=innovation, H=H, R=self.R_zaru)
+
+    def update_barometer(self, baro_z):
+        """Update der Z-Achse durch das Barometer (3D Padding für FilterPy)."""
+        # H-Matrix muss nun 3 Zeilen (für 3D-Messung) und 15 Spalten haben
+        H = np.zeros((3, 15))
+        H[2, 2] = 1.0  # Wir mappen nur die Z-Position (Index 2) auf die Z-Messung (Reihe 2)
+        
+        # Innovation (Messung - Vorhersage)
+        # X und Y setzen wir Nullen (werden vom Filter wegen R=1e8 komplett ignoriert)
+        innovation = np.array([0.0, 0.0, baro_z - self.p[2]])
+        
+        self._robust_update(z=innovation, H=H, R=self.R_baro)
 
     def update_gravity(self, acc_meas):
         """Nutzt Beschleunigung im Stillstand als Wasserwaage."""
