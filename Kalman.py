@@ -46,7 +46,8 @@ def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch):
         ba_rw = config.ACCEL_BIAS_RW, 
         grav_unc = config.GRAVITY_UNCERTAINTY,
         zupt_unc = config.ZUPT_UNCERTAINTY,
-        baro_unc = config.BARO_UNCERTAINTY
+        baro_unc = config.BARO_UNCERTAINTY,
+        zaru_unc = getattr(config, 'ZARU_UNCERTAINTY', 0.01)
     )
     
     positions, orientations, velocities, times_plot = [], [], [], []
@@ -74,14 +75,20 @@ def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch):
             eskf.update_barometer(row['Altitude_filt [m]'])
             last_baro_time = current_baro_time
 
-        # 4. ZUPT & Gravity Update
+# 4. ZUPT, ZARU & Gravity Update (Mit Sicherheits-Check!)
         acc_world = eskf.q.apply(acc_calib)
         acc_magnitude = np.linalg.norm(acc_world + eskf.g)
         
+        # Gyro-Magnitude in rad/s umrechnen für den Vergleich
+        gyro_magnitude = np.linalg.norm(gyro_calib) 
+        zaru_threshold_rads = getattr(config, 'STILLNESS_THRESHOLD', 2.0) * (np.pi / 180.0)
+        
         if getattr(config, 'USE_ZUPT', False):
-            if acc_magnitude < config.ZUPT_THRESHOLD_MS2:
-                eskf.update_zupt()
-                eskf.update_gravity(acc_calib)
+            # KRITISCHER CHECK: Beschleunigung ~ 1g UND keine Rotation!
+            if acc_magnitude < config.ZUPT_THRESHOLD_MS2 and gyro_magnitude < zaru_threshold_rads:
+                eskf.update_zupt()             # Killt Geschwindigkeits-Drift
+                eskf.update_zaru(gyro_calib)   # Killt Gyro/Yaw-Drift
+                eskf.update_gravity(acc_calib) # Begradigt den Horizont (Roll/Pitch)
 
         # 5. Speichern
         positions.append(eskf.p.copy())

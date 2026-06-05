@@ -9,7 +9,7 @@ class FilterpyESKF15:
     Error:   d_Pos(3), d_Vel(3), d_Theta(3), d_ba(3), d_bg(3) = 15 Dimensionen
     """
 
-    def __init__(self, initial_pos, initial_q, gyro_noise_std, accel_noise, bg_rw, ba_rw, grav_unc, zupt_unc, baro_unc):
+    def __init__(self, initial_pos, initial_q, gyro_noise_std, accel_noise, bg_rw, ba_rw, grav_unc, zupt_unc, baro_unc, zaru_unc):
         self.p = np.array(initial_pos, dtype=float)
         self.v = np.zeros(3)
         self.q = initial_q
@@ -36,6 +36,7 @@ class FilterpyESKF15:
         self.R_zupt = np.eye(3) * (zupt_unc)**2
         self.R_baro = np.eye(3) * 1e8          # Unendlich hohes Rauschen für X und Y
         self.R_baro[2, 2] = baro_unc**2        # Echtes (niedriges) Rauschen für Z
+        self.R_zaru = np.eye(3) * (zaru_unc)**2
 
     def update_barometer(self, baro_z):
         """Update der Z-Achse durch das Barometer (3D Padding für FilterPy)."""
@@ -108,6 +109,22 @@ class FilterpyESKF15:
         
         innovation = np.array([0.0, 0.0, 0.0]) - self.v
         self.kf.update(z=innovation, R=self.R_zupt, H=H)
+        self._inject_error_and_reset()
+
+    def update_zaru(self, gyro_meas):
+        """
+        Zero Angular Rate Update (ZARU).
+        Zwingt die Drehrate im Stillstand auf 0 und eliminiert dadurch den Yaw-Drift (Gieren).
+        """
+        H = np.zeros((3, 15))
+        # Die Beobachtung mappt direkt negativ auf den Gyroskop-Bias (Index 12 bis 15 im Error-State)
+        H[0:3, 12:15] = -np.eye(3) 
+        
+        # Innovation: Wahre Drehrate (0.0) minus aktuell geschätzte Drehrate
+        gyro_true = gyro_meas - self.bg
+        innovation = np.array([0.0, 0.0, 0.0]) - gyro_true
+        
+        self.kf.update(z=innovation, R=self.R_zaru, H=H)
         self._inject_error_and_reset()
 
     def update_gravity(self, acc_meas):
