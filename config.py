@@ -1,7 +1,7 @@
 # ==========================================
 # DATEI- UND PFADEINSTELLUNGEN
 # ==========================================
-LOG_FOLDER = "./Data/2m1"
+LOG_FOLDER = "./Data/1m1"
 ACCEL_CALIB_FILE = "acc_param.json"
 GYRO_CALIB_FILE = "gyro_bias.json"
 
@@ -12,6 +12,24 @@ USE_AUTO_INIT = True           # Start Ruhephase suchen
 STILLNESS_THRESHOLD = 2.0      # Drehgeschwindigkeit
 MIN_STILL_SECONDS = 0.1        # Ruhesekunden
 
+MAX_PROCESS_TIME = None
+
+# ==========================================
+# POST-PROCESSING (Smoother)
+# ==========================================
+USE_SMOOTHER = True            # Smoother ein-/ausschalten
+
+# Positions-Ziele am Ende des Laufs
+SMOOTH_TO_BARO_Z = True        # Z-Achse an die exakt letzte Barometer-Höhe angleichen
+SMOOTH_XY_TO_ZERO = False       # X/Y-Achsen exakt über den Startpunkt zwingen
+TARGET_X_M = 0.0               # (m) Ziel X (0.0 = exakt über Start)
+TARGET_Y_M = 0.0               # (m) Ziel Y (0.0 = exakt über Start)
+
+# Geschwindigkeits-Ziele
+# VORSICHT: Nur auf True setzen, wenn der Run komplett bis zum Stillstand/Buzzer läuft!
+# Bei gekürzten Läufen (MAX_PROCESS_TIME) zwingend auf False lassen!
+FORCE_V_END_ZERO = False
+
 # ==========================================
 # KALMAN FILTER TUNING 
 # ==========================================
@@ -20,7 +38,7 @@ USE_ZUPT = True
 # Barometer Tuning
 BARO_UNCERTAINTY = 0.5         # (m) Messrauschen des Barometers
 USE_BARO_PRE_FILTER = True     # Zero-Phase Filter für Barometer
-BARO_CUTOFF_HZ = 1           
+BARO_CUTOFF_HZ = 1.5           
 
 # Prozessrauschen (Q): IMU-Integration
 ACCEL_NOISE_DENSITY = 0.01      # (m/s^2) Je höher, desto mehr vertraut der Filter auf externe Updates

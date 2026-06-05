@@ -179,6 +179,14 @@ def main():
     df_imu['Altitude_filt [m]'] -= start_altitude
     df_imu['Altitude [m]'] -= start_altitude # (Optional: auch Rohdaten für den Plot nullen)
 
+    if getattr(config, 'MAX_PROCESS_TIME', None) is not None:
+        start_time_sec = df_imu['Time'].iloc[init_end_idx]
+        max_time_sec = start_time_sec + config.MAX_PROCESS_TIME
+        
+        # Schneidet alles ab, was zeitlich nach unserer Ziellänge kommt
+        df_imu = df_imu[df_imu['Time'] <= max_time_sec]
+
+
     # Kalman Filter Start 
     eskf = FilterpyESKF15( 
         initial_pos = [0.0, 0.0, 0.0], 
@@ -239,42 +247,55 @@ def main():
         velocities.append(eskf.v.copy())
         times_plot.append(times[i])
 
-    # # ---------------------------------------------------------
-    # # POST-PROCESSING: BOUNDARY CONDITION SMOOTHING (Rückwärts-Glättung)
-    # # ---------------------------------------------------------
-    # positions = np.array(positions)
-    # velocities = np.array(velocities)
-    # times_plot = np.array(times_plot)
-    
-    # print("Wende Smoother an (Rückwärts-Drift-Korrektur)...")
-    
-    # # 1. Wir wissen, am Ende des Laufs (am Buzzer / beim Stillstand) MUSS v = 0 sein.
-    # # Alles, was am Ende nicht 0 ist, ist unser aufsummierter Drift.
-    # v_end_error = velocities[-1] - np.array([0.0, 0.0, 0.0]) 
-    # num_samples = len(velocities)
-    
-    # # 2. Wir berechnen, wie viel Fehler pro Zeitschritt entstanden ist
-    # v_drift_rate = v_end_error / num_samples
-    
-    # smoothed_velocities = np.zeros_like(velocities)
-    # smoothed_positions = np.zeros_like(positions)
-    
-    # # 3. Smoother-Schleife: Wir ziehen den Drift rückwirkend ab
-    # for i in range(num_samples):
-    #     # Am Anfang (i=0) wird 0 abgezogen, am Ende (i=num_samples) der volle Fehler
-    #     smoothed_velocities[i] = velocities[i] - (i * v_drift_rate)
+    # ---------------------------------------------------------
+    #  BOUNDARY CONDITION SMOOTHER 
+    # ---------------------------------------------------------
+    if getattr(config, 'USE_SMOOTHER', False):
+        print("Wende physikalischen Rückwärts-Smoother an...")
+        num_samples = len(velocities)
         
-    # # 4. Da die alte Position auf der driftenden Geschwindigkeit basierte,
-    # # berechnen wir die Route aus der nun perfekten Geschwindigkeit komplett neu!
-    # smoothed_positions[0] = positions[0]
-    # for i in range(1, num_samples):
-    #     dt = times_plot[i] - times_plot[i-1]
-    #     smoothed_positions[i] = smoothed_positions[i-1] + smoothed_velocities[i] * dt
+        # Lineare Faktoren von 0.0 (Start) bis 1.0 (Ende)
+        drift_factors = np.linspace(0.0, 1.0, num_samples)[:, np.newaxis]
 
-    # # Für die Visualisierung ab hier nun die "smoothed_positions" und "smoothed_velocities" verwenden!
-    # positions = smoothed_positions
-    # velocities = smoothed_velocities
-    # # ---------------------------------------------------------    
+        smoothed_velocities = velocities.copy()
+        smoothed_positions = positions.copy()
+
+        # --- A. GESCHWINDIGKEIT (Nur für komplette Runs!) ---
+        if getattr(config, 'FORCE_V_END_ZERO', False):
+            print(" -> Korrigiere End-Geschwindigkeit auf 0.0 m/s")
+            v_end_error = velocities[-1] - np.array([0.0, 0.0, 0.0])
+            smoothed_velocities = velocities - (drift_factors * v_end_error)
+            
+            # Da sich die Geschwindigkeit geändert hat, müssen wir die Route neu integrieren
+            smoothed_positions[0] = positions[0]
+            dt_array = np.diff(times_plot)
+            for i in range(1, num_samples):
+                smoothed_positions[i] = smoothed_positions[i-1] + smoothed_velocities[i] * dt_array[i-1]
+
+        # --- B. POSITION (Für alle Runs, zieht Track physikalisch korrekt an die Wand) ---
+        target_pos = smoothed_positions[-1].copy() # Default: Nichts ändern
+
+        if getattr(config, 'SMOOTH_XY_TO_ZERO', False):
+            target_pos[0] = getattr(config, 'TARGET_X_M', 0.0)
+            target_pos[1] = getattr(config, 'TARGET_Y_M', 0.0)
+            print(f" -> Korrigiere End-Position X/Y auf [{target_pos[0]:.2f}, {target_pos[1]:.2f}]")
+        
+        if getattr(config, 'SMOOTH_TO_BARO_Z', False):
+            # Holt sich dynamisch die absolut letzte Barometer-Höhe aus dem Datensatz!
+            baro_end_z = df_imu['Altitude_filt [m]'].iloc[-1]
+            target_pos[2] = baro_end_z
+            print(f" -> Korrigiere End-Position Z auf Barometer-Höhe: {baro_end_z:.2f}m")
+
+        # Differenz (Fehler) zwischen ESKF-Ende und unserem physikalischen Ziel berechnen
+        pos_end_error = smoothed_positions[-1] - target_pos
+        
+        # Fehler linear über den gesamten Datensatz rückwärts abziehen
+        smoothed_positions -= (drift_factors * pos_end_error)
+
+        # Arrays für das finale Plotting überschreiben
+        positions = smoothed_positions
+        velocities = smoothed_velocities
+    # ---------------------------------------------------------   
         
     # 5. Visualisierung
     positions = np.array(positions)
