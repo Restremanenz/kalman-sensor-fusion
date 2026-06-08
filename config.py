@@ -1,7 +1,7 @@
 # ==========================================
 # DATEI- UND PFADEINSTELLUNGEN
 # ==========================================
-LOG_FOLDER = "./Data/1m2"
+LOG_FOLDER = "./Data/1m_LR/20260608_00_17_00"
 ACCEL_CALIB_FILE = "acc_param.json"
 GYRO_CALIB_FILE = "gyro_bias.json"
 
@@ -20,7 +20,7 @@ MAX_PROCESS_TIME = None
 USE_SMOOTHER = True            # Smoother ein-/ausschalten
 
 # Positions-Ziele am Ende des Laufs
-SMOOTH_TO_BARO_Z = False        # Z-Achse an die exakt letzte Barometer-Höhe angleichen
+SMOOTH_TO_BARO_Z = True        # Z-Achse an die exakt letzte Barometer-Höhe angleichen
 SMOOTH_XY_TO_ZERO = False       # X/Y-Achsen exakt über den Startpunkt zwingen
 TARGET_X_M = 0.0               # (m) Ziel X (0.0 = exakt über Start)
 TARGET_Y_M = 0.0               # (m) Ziel Y (0.0 = exakt über Start)
@@ -36,12 +36,12 @@ FORCE_V_END_ZERO = True
 USE_ZUPT = True
 
 # Barometer Tuning
-BARO_UNCERTAINTY = 0.25         # (m) Messrauschen des Barometers
+BARO_UNCERTAINTY = 0.3         # (m) Messrauschen des Barometers
 USE_BARO_PRE_FILTER = True     # Zero-Phase Filter für Barometer
 BARO_CUTOFF_HZ = 1.5           
 
 # Prozessrauschen (Q): IMU-Integration
-ACCEL_NOISE_DENSITY = 0.04      # (m/s^2) Je höher, desto mehr vertraut der Filter auf externe Updates
+ACCEL_NOISE_DENSITY = 0.05      # (m/s^2) Je höher, desto mehr vertraut der Filter auf externe Updates
 
 # Messrauschen (R)
 GRAVITY_UNCERTAINTY = 0.5      # (m/s^2) 
