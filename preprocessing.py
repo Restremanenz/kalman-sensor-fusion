@@ -26,6 +26,7 @@ class IMUPreprocessor:
         df_acc = reader.get_sensor_data("lsm6dsv16x_acc").sort_values("Time")
         df_gyro = reader.get_sensor_data("lsm6dsv16x_gyro").sort_values("Time")
         df_baro = reader.get_sensor_data("lps22df_press").sort_values("Time")
+        df_mag = reader.get_sensor_data("lis2mdl_mag").sort_values("Time")
 
         # Auslesen der echten Frequenzen
         gyro_info = reader.get_sensor_info("lsm6dsv16x_gyro")
@@ -33,16 +34,27 @@ class IMUPreprocessor:
 
         baro_info = reader.get_sensor_info("lps22df_press")
         fs_baro = baro_info.get("measured_odr_hz", 25.0) if baro_info else 25.0
-        print(f" -> Sensor-Raten: IMU @ {fs_dynamisch:.1f} Hz | Baro @ {fs_baro:.1f} Hz")
+        
+        mag_info = reader.get_sensor_info("lis2mdl_mag")
+        fs_mag = mag_info.get("measured_odr_hz", 100.0) if mag_info else 100.0
+        
+        print(f" -> Sensor-Raten: IMU @ {fs_dynamisch:.1f} Hz | Baro @ {fs_baro:.1f} Hz | Mag @ {fs_mag:.1f} Hz")
 
         # Automatische Barometer-Spaltenerkennung
         original_press_col = [col for col in df_baro.columns if col != 'Time'][0]
         df_baro = df_baro.rename(columns={original_press_col: 'P [hPa]'})
         df_baro['Baro_Time'] = df_baro['Time'] 
 
+        df_mag = reader.get_sensor_data("lis2mdl_mag").sort_values("Time")
+        df_mag['Mag_Time'] = df_mag['Time'] 
+
         # Pandas Merge-Magie (Dual-Path Synchronisation)
         df_imu = pd.merge_asof(df_acc, df_gyro, on="Time", direction="nearest")
         df_imu = pd.merge_asof(df_imu, df_baro, on="Time", direction="backward")
+        df_imu = pd.merge_asof(df_imu, df_mag, on="Time", direction="nearest")
+
+        # Schließt Lücken am Rand des Datensatzes vor dem Filtern
+        df_imu = df_imu.ffill().bfill()
         
         return df_imu.reset_index(drop=True), fs_dynamisch
 
@@ -84,29 +96,42 @@ class IMUPreprocessor:
         return df_init, init_end_idx
 
     def initialize_run(self, df_init, calib):
-        """Berechnet initiale Orientierung und kalibriert Gyro Bias & Basisdruck."""
         # 1. Gyro Bias
         raw_gyros_init = df_init[['G_x [dps]', 'G_y [dps]', 'G_z [dps]']].values
         calib.gyro_bias = np.mean(raw_gyros_init, axis=0)
 
-        # 2. Wasserwaage (Schwerkraft-Vektor) -> q_init
+        # 2. Beschleunigung auswerten
         raw_accs_init = df_init[['A_x [g]', 'A_y [g]', 'A_z [g]']].values
         accs_init_calib = np.array([calib.calibrate_acc(a) for a in raw_accs_init])
         mean_acc = np.mean(accs_init_calib, axis=0)
-        
-        v1 = mean_acc / np.linalg.norm(mean_acc)
-        v2 = np.array([0.0, 0.0, 1.0])
-        axis = np.cross(v1, v2)
-        axis_norm = np.linalg.norm(axis)
-        
-        if axis_norm > 1e-6:
-            axis = axis / axis_norm
-            angle = np.arccos(np.clip(np.dot(v1, v2), -1.0, 1.0))
-            q_init = R.from_rotvec(axis * angle)
-        else:
-            q_init = R.from_quat([0,0,0,1])
+        v_acc_body = mean_acc / np.linalg.norm(mean_acc)
 
-        # 3. Barometer Basisdruck
+        # 3. Magnetometer auswerten (Falls vorhanden)
+        if 'M_x [G]' in df_init.columns:
+            raw_mags_init = df_init[['M_x [G]', 'M_y [G]', 'M_z [G]']].values
+            # Annahme: Deine Kalibrierungsklasse hat nun eine Methode calibrate_mag(m)
+            mags_init_calib = np.array([calib.calibrate_mag(m) for m in raw_mags_init])
+            mean_mag = np.mean(mags_init_calib, axis=0)
+            v_mag_body = mean_mag / np.linalg.norm(mean_mag)
+        else:
+            v_mag_body = np.array([1.0, 0.0, 0.0]) # Fallback
+            print("Kein Magnetometer gefunden")
+
+        # 4. Tilt-Compensated Initial Heading (Wahba's Problem via SciPy)
+        # Globales Z ist UP. Gravitation drückt DOWN, also misst das Accel UP [0,0,1].
+        g_global_expected = np.array([0.0, 0.0, 1.0])
+        mag_global_expected = np.array(self.config.GLOBAL_MAG_REF)
+        mag_global_expected /= np.linalg.norm(mag_global_expected)
+
+        # align_vectors berechnet R, das Body-Vektoren auf Globale Vektoren mappt.
+        # Gewichtung: Accel ist für Roll/Pitch extrem wichtig (1.0), Mag nur sekundär für Yaw (0.2).
+        q_init, _ = R.align_vectors(
+            a=[g_global_expected, mag_global_expected],  # Expected (Global)
+            b=[v_acc_body, v_mag_body],                  # Measured (Body)
+            weights=[1.0, 0.2]
+        )
+
+        # 5. Barometer Basisdruck
         P0 = df_init['P [hPa]'].mean()
         print(f" -> Kalibrierter Basisdruck P0: {P0:.2f} hPa")
         

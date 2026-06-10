@@ -1,9 +1,10 @@
 # ==========================================
 # DATEI- UND PFADEINSTELLUNGEN
 # ==========================================
-LOG_FOLDER = "./Data/1m_LR/20260608_00_17_00"
+LOG_FOLDER = "./Data/2m1"
 ACCEL_CALIB_FILE = "acc_param.json"
 GYRO_CALIB_FILE = "gyro_bias.json"
+MAG_CALIB_FILE = "mag_param.json"
 
 # ==========================================
 # ABLAUF-STEUERUNG & INITIALISIERUNG
@@ -55,6 +56,20 @@ GYRO_BIAS_RW = 1e-5            # Wie schnell darf sich der Gyro-Bias ändern?
 
 # Heuristik-Schwellenwerte
 ZUPT_THRESHOLD_MS2 = 0.2       # Stehend
+
+# ==========================================
+# MAGNETOMETER & 18-STATE ESKF
+# ==========================================
+USE_18_STATE_ESKF = True      # False = Mag nur für Start-Heading; True = In-Run Mag-Updates
+MAG_CALIB_FILE = "mag_param.json"
+
+# Referenz-Magnetfeld (z.B. Innsbruck: Inklination ca. 64°, Deklination ca. 3°)
+# Vektor in [Nord, Ost, Unten] bzw. an dein globales Koordinatensystem (Z=Up) angepasst:
+# N: 0.44, E: 0.02, U: -0.90 -> Bitte auf exakt 1.0 normieren!
+GLOBAL_MAG_REF = [0.44, 0.02, -0.90]  
+
+MAG_UNCERTAINTY = 0.01         # (Gauss) ca. 1-2% des Erdmagnetfelds
+MAG_BIAS_RW = 1e-5             # Random Walk für Mag-Bias (Wie schnell stört die Kletterwand?)
 
 # ==========================================
 # VISUALISIERUNG
