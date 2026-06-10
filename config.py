@@ -2,9 +2,7 @@
 # DATEI- UND PFADEINSTELLUNGEN
 # ==========================================
 LOG_FOLDER = "./Data/2m1"
-ACCEL_CALIB_FILE = "acc_param.json"
-GYRO_CALIB_FILE = "gyro_bias.json"
-MAG_CALIB_FILE = "mag_param.json"
+IMU_CALIB_FILE = "sensor_params.json"
 
 # ==========================================
 # ABLAUF-STEUERUNG & INITIALISIERUNG
@@ -60,7 +58,7 @@ ZUPT_THRESHOLD_MS2 = 0.2       # Stehend
 # ==========================================
 # MAGNETOMETER & 18-STATE ESKF
 # ==========================================
-USE_MAGNETOMETER = True      # HAUPTSCHALTER
+USE_MAGNETOMETER = False      # HAUPTSCHALTER
 USE_18_STATE_ESKF = False     # TOGGLE: True = In-Run Mag-Updates (18-State) | False = Nur Start-Heading (15-State)
 MAG_CALIB_FILE = "mag_param.json"
 

@@ -12,23 +12,22 @@ from filters import FilterpyESKF
 
 
 class IMUCalibration:
-    """Lädt die ST-Kalibrierungsdaten und wendet sie an."""
-    def __init__(self, acc_json_path, gyro_json_path, mag_json_path):
-        with open(acc_json_path, 'r') as f:
-            acc_data = json.load(f)
-            self.acc_bias = np.array(acc_data["offset_b"])
-            self.acc_M = np.array(acc_data["matrix_M"])
+    """Lädt die ST-Kalibrierungsdaten aus einer kombinierten JSON-Datei und wendet sie an."""
+    def __init__(self, calib_json_path):
+        with open(calib_json_path, 'r') as f:
+            data = json.load(f)
             
-        with open(gyro_json_path, 'r') as f:
-            gyro_data = json.load(f)
-            self.gyro_bias = np.array(gyro_data["offset_b"])
-            self.gyro_noise_std = np.array(gyro_data["noise_std"]) * (np.pi / 180.0)
+            # 1. Accelerometer Parameter laden
+            self.acc_bias = np.array(data["acc"]["offset_b"])
+            self.acc_M = np.array(data["acc"]["matrix_M"])
+            
+            # 2. Gyroskop Parameter laden
+            self.gyro_bias = np.array(data["gyro"]["offset_b"])
+            self.gyro_noise_std = np.array(data["gyro"]["noise_std"]) * (np.pi / 180.0)
 
-        
-        with open(mag_json_path, 'r') as f:
-                mag_data = json.load(f)
-                self.mag_bias = np.array(mag_data["offset_b"])
-                self.mag_M = np.array(mag_data["matrix_M"])
+            # 3. Magnetometer Parameter laden
+            self.mag_bias = np.array(data["mag"]["offset_b"])
+            self.mag_M = np.array(data["mag"]["matrix_M"])
 
     def calibrate_acc(self, raw_acc):
         calibrated = self.acc_M @ (raw_acc - self.acc_bias)
@@ -131,7 +130,7 @@ def main():
     # 1. SETUP & DATEN LADEN
     # ==============================================================
     reader = STLogReader(config.LOG_FOLDER)
-    calib = IMUCalibration(config.ACCEL_CALIB_FILE, config.GYRO_CALIB_FILE, config.MAG_CALIB_FILE)
+    calib = IMUCalibration(config.IMU_CALIB_FILE)
     preprocessor = IMUPreprocessor(config)
     
     df_imu, fs_dynamisch = preprocessor.load_and_merge_data(reader)
