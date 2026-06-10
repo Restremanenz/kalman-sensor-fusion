@@ -60,7 +60,8 @@ ZUPT_THRESHOLD_MS2 = 0.2       # Stehend
 # ==========================================
 # MAGNETOMETER & 18-STATE ESKF
 # ==========================================
-USE_18_STATE_ESKF = True      # False = Mag nur für Start-Heading; True = In-Run Mag-Updates
+USE_MAGNETOMETER = True      # HAUPTSCHALTER
+USE_18_STATE_ESKF = False     # TOGGLE: True = In-Run Mag-Updates (18-State) | False = Nur Start-Heading (15-State)
 MAG_CALIB_FILE = "mag_param.json"
 
 # Referenz-Magnetfeld (z.B. Innsbruck: Inklination ca. 64°, Deklination ca. 3°)

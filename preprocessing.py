@@ -96,40 +96,48 @@ class IMUPreprocessor:
         return df_init, init_end_idx
 
     def initialize_run(self, df_init, calib):
-        # 1. Gyro Bias
+        # 1. Gyro Bias berechnen
         raw_gyros_init = df_init[['G_x [dps]', 'G_y [dps]', 'G_z [dps]']].values
         calib.gyro_bias = np.mean(raw_gyros_init, axis=0)
 
-        # 2. Beschleunigung auswerten
+        # 2. Beschleunigung auswerten (Schwerkraft-Vektor)
         raw_accs_init = df_init[['A_x [g]', 'A_y [g]', 'A_z [g]']].values
         accs_init_calib = np.array([calib.calibrate_acc(a) for a in raw_accs_init])
         mean_acc = np.mean(accs_init_calib, axis=0)
         v_acc_body = mean_acc / np.linalg.norm(mean_acc)
 
-        # 3. Magnetometer auswerten (Falls vorhanden)
-        if 'M_x [G]' in df_init.columns:
+        
+        if self.config.USE_MAGNETOMETER and 'M_x [G]' in df_init.columns:
+            print(" -> Initialisierung: Nutze Beschleunigung & Magnetometer für echtes Start-Heading.")
             raw_mags_init = df_init[['M_x [G]', 'M_y [G]', 'M_z [G]']].values
-            # Annahme: Deine Kalibrierungsklasse hat nun eine Methode calibrate_mag(m)
             mags_init_calib = np.array([calib.calibrate_mag(m) for m in raw_mags_init])
             mean_mag = np.mean(mags_init_calib, axis=0)
             v_mag_body = mean_mag / np.linalg.norm(mean_mag)
+
+            g_global_expected = np.array([0.0, 0.0, 1.0])
+            mag_global_expected = np.array(self.config.GLOBAL_MAG_REF)
+            mag_global_expected /= np.linalg.norm(mag_global_expected)
+
+            # Wahba's Problem lösen (Kombination aus Acc und Mag)
+            q_init, _ = R.align_vectors(
+                a=[g_global_expected, mag_global_expected],
+                b=[v_acc_body, v_mag_body],
+                weights=[1.0, 0.2]
+            )
         else:
-            v_mag_body = np.array([1.0, 0.0, 0.0]) # Fallback
-            print("Kein Magnetometer gefunden")
-
-        # 4. Tilt-Compensated Initial Heading (Wahba's Problem via SciPy)
-        # Globales Z ist UP. Gravitation drückt DOWN, also misst das Accel UP [0,0,1].
-        g_global_expected = np.array([0.0, 0.0, 1.0])
-        mag_global_expected = np.array(self.config.GLOBAL_MAG_REF)
-        mag_global_expected /= np.linalg.norm(mag_global_expected)
-
-        # align_vectors berechnet R, das Body-Vektoren auf Globale Vektoren mappt.
-        # Gewichtung: Accel ist für Roll/Pitch extrem wichtig (1.0), Mag nur sekundär für Yaw (0.2).
-        q_init, _ = R.align_vectors(
-            a=[g_global_expected, mag_global_expected],  # Expected (Global)
-            b=[v_acc_body, v_mag_body],                  # Measured (Body)
-            weights=[1.0, 0.2]
-        )
+            print(" -> Initialisierung: Magnetometer DEAKTIVIERT. Nutze reine Wasserwaage (Yaw = 0).")
+            # Reine Schwerkraft-Ausrichtung (Exakt wie in deinem allerersten Code!)
+            v1 = v_acc_body
+            v2 = np.array([0.0, 0.0, 1.0])
+            axis = np.cross(v1, v2)
+            axis_norm = np.linalg.norm(axis)
+            
+            if axis_norm > 1e-6:
+                axis = axis / axis_norm
+                angle = np.arccos(np.clip(np.dot(v1, v2), -1.0, 1.0))
+                q_init = R.from_rotvec(axis * angle)
+            else:
+                q_init = R.from_quat([0,0,0,1])
 
         # 5. Barometer Basisdruck
         P0 = df_init['P [hPa]'].mean()

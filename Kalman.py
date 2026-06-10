@@ -44,7 +44,10 @@ class IMUCalibration:
 
 
 def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch):
-    print(f"Starte {'18-State' if config.USE_18_STATE_ESKF else '15-State'} Error-State Kalman Filter...")
+    # Bestimme, ob der 18-State Modus wirklich aktiv sein darf
+    mag_in_run_active = config.USE_MAGNETOMETER and config.USE_18_STATE_ESKF
+    
+    print(f"Starte {'18-State' if mag_in_run_active else '15-State'} Error-State Kalman Filter...")
     
     eskf = FilterpyESKF(
         initial_pos = [0.0, 0.0, 0.0], 
@@ -57,7 +60,7 @@ def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch):
         zupt_unc = config.ZUPT_UNCERTAINTY,
         baro_unc = config.BARO_UNCERTAINTY,
         zaru_unc = config.ZARU_UNCERTAINTY,
-        use_18_state = config.USE_18_STATE_ESKF,
+        use_18_state = mag_in_run_active,
         mag_rw = config.MAG_BIAS_RW,
         mag_unc = config.MAG_UNCERTAINTY
     )
@@ -93,10 +96,8 @@ def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch):
             eskf.update_barometer(row['Altitude_filt [m]'])
             last_baro_time = current_baro_time
 
-        # 4. Magnetometer Update (Dynamischer Toggle)
-        if config.USE_18_STATE_ESKF:
+        if mag_in_run_active:
             current_mag_time = row['Mag_Time']
-            # Update NUR triggern, wenn ein ECHTER neuer Magnetwert vorliegt!
             if pd.notna(current_mag_time) and current_mag_time != last_mag_time:
                 eskf.update_mag(mag_calib)
                 last_mag_time = current_mag_time
@@ -134,7 +135,7 @@ def main():
     preprocessor = IMUPreprocessor(config)
     
     df_imu, fs_dynamisch = preprocessor.load_and_merge_data(reader)
-    print(df_imu.columns)
+
     # ==============================================================
     # 2. PRE-PROCESSING (Initialisierung & Barometer)
     # ==============================================================
@@ -187,6 +188,7 @@ def main():
     print(f"\n[INFO] Finaler In-Run Bias Schätzwert:")
     print(f"Gyro Bias (bg): {eskf.bg}")
     print(f"Accel Bias (ba): {eskf.ba}")
+    print(f"Accel Bias (bm): {eskf.bm}")
 
 if __name__ == "__main__":
     main()
