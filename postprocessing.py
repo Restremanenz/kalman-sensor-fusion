@@ -55,7 +55,8 @@ class PostProcessor:
         # Differenz (Fehler) zwischen ESKF-Ende und unserem physikalischen Ziel berechnen
         pos_end_error = smoothed_positions[-1] - target_pos
         
-        # Fehler linear über den gesamten Datensatz rückwärts abziehen
-        smoothed_positions -= (drift_factors * pos_end_error)
+        # Fehler quadratisch über den gesamten Datensatz rückwärts abziehen
+        drift_factors_squared = drift_factors ** 2
+        smoothed_positions -= (drift_factors_squared * pos_end_error)
 
         return smoothed_positions, smoothed_velocities

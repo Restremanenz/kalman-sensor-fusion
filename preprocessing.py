@@ -5,11 +5,11 @@ from scipy.signal import butter, filtfilt
 from scipy.spatial.transform import Rotation as R
 from visualization import TrajectoryVisualizer
 
-def apply_zero_phase_filter(data, cutoff, fs, order=4):
-    """Wendet einen Zero-Phase Butterworth Low-Pass Filter an."""
+def apply_zero_phase_filter(data, cutoff, fs, order=4, btype='low'):
+    """Wendet einen Zero-Phase Butterworth Filter (Low-Pass oder High-Pass) an."""
     nyq = 0.5 * fs
     normal_cutoff = cutoff / nyq
-    b, a = butter(order, normal_cutoff, btype='low', analog=False)
+    b, a = butter(order, normal_cutoff, btype=btype, analog=False) 
     padlen = min(3 * max(len(a), len(b)), len(data) - 1)
     return filtfilt(b, a, data, padtype='even', padlen=padlen)
 
@@ -172,5 +172,32 @@ class IMUPreprocessor:
             max_time_sec = start_time_sec + self.config.MAX_PROCESS_TIME
             df_imu = df_imu[df_imu['Time'] <= max_time_sec]
             print(f" -> DEBUG-MODUS: Datensatz auf {self.config.MAX_PROCESS_TIME}s gekürzt!")
-            
+
+        # ROBUSTE OFFLINE-STILLSTANDSERKENNUNG   
+        # 1. Betrag der Beschleunigung berechnen
+        acc_mag = np.sqrt(df_imu['A_x [g]']**2 + df_imu['A_y [g]']**2 + df_imu['A_z [g]']**2)
+        
+        # 2. Hochpass-Filter (nutzt nun die Variable aus config)
+        acc_hp = apply_zero_phase_filter(
+            acc_mag.values, 
+            cutoff=self.config.OFFLINE_ZUPT_HP_CUTOFF, 
+            fs=fs_dynamisch, 
+            order=1, 
+            btype='high'
+        )
+        
+        # 3. Absolutbetrag bilden
+        acc_rectified = np.abs(acc_hp)
+        
+        # 4. Tiefpass-Filter (nutzt nun die Variable aus config)
+        acc_smoothed = apply_zero_phase_filter(
+            acc_rectified, 
+            cutoff=self.config.OFFLINE_ZUPT_LP_CUTOFF, 
+            fs=fs_dynamisch, 
+            order=1, 
+            btype='low'
+        )
+        
+        # 5. Schwellenwert anwenden (nutzt nun die Variable aus config)
+        df_imu['Stationary'] = acc_smoothed < self.config.OFFLINE_ZUPT_THRESHOLD
         return df_imu

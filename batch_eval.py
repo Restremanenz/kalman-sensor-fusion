@@ -40,7 +40,7 @@ def main():
             config.LOG_FOLDER = folder
             
             reader = STLogReader(config.LOG_FOLDER)
-            calib = IMUCalibration(config.ACCEL_CALIB_FILE, config.GYRO_CALIB_FILE)
+            calib = IMUCalibration(config.IMU_CALIB_FILE)
             preprocessor = IMUPreprocessor(config)
             
             df_imu, fs_dynamisch = preprocessor.load_and_merge_data(reader)

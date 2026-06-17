@@ -1,14 +1,14 @@
 # ==========================================
 # DATEI- UND PFADEINSTELLUNGEN
 # ==========================================
-LOG_FOLDER = "./Data/2m1"
+LOG_FOLDER = "./Data/lena4"
 IMU_CALIB_FILE = "sensor_params.json"
 
 # ==========================================
 # ABLAUF-STEUERUNG & INITIALISIERUNG
 # ==========================================
 USE_AUTO_INIT = True           # Start Ruhephase suchen
-STILLNESS_THRESHOLD = 3.0      # Drehgeschwindigkeit
+STILLNESS_THRESHOLD = 4.0      # Drehgeschwindigkeit
 MIN_STILL_SECONDS = 0.1        # Ruhesekunden
 
 MAX_PROCESS_TIME = None
@@ -19,7 +19,7 @@ MAX_PROCESS_TIME = None
 USE_SMOOTHER = True            # Smoother ein-/ausschalten
 
 # Positions-Ziele am Ende des Laufs
-SMOOTH_TO_BARO_Z = True        # Z-Achse an die exakt letzte Barometer-Höhe angleichen
+SMOOTH_TO_BARO_Z = False        # Z-Achse an die exakt letzte Barometer-Höhe angleichen
 SMOOTH_XY_TO_ZERO = False       # X/Y-Achsen exakt über den Startpunkt zwingen
 TARGET_X_M = 0.0               # (m) Ziel X (0.0 = exakt über Start)
 TARGET_Y_M = 0.0               # (m) Ziel Y (0.0 = exakt über Start)
@@ -32,7 +32,6 @@ FORCE_V_END_ZERO = True
 # ==========================================
 # KALMAN FILTER TUNING 
 # ==========================================
-USE_ZUPT = True
 
 # Barometer Tuning
 BARO_UNCERTAINTY = 0.3         # (m) Messrauschen des Barometers
@@ -44,17 +43,22 @@ ACCEL_NOISE_DENSITY = 0.05      # (m/s^2) Je höher, desto mehr vertraut der Fil
 
 # Messrauschen (R)
 GRAVITY_UNCERTAINTY = 0.5      # (m/s^2) 
-ZUPT_UNCERTAINTY = 0.05        # (m/s) 
-ZARU_UNCERTAINTY = 0.01
 
 # Bias Instability (Random Walk) 
 # Erlaubt dem Filter, den Gyro- und Accel-Bias während des Laufs anzupassen
 ACCEL_BIAS_RW = 1e-4           # Wie schnell darf sich der Accel-Bias ändern?
 GYRO_BIAS_RW = 1e-5            # Wie schnell darf sich der Gyro-Bias ändern?
 
-# Heuristik-Schwellenwerte
-ZUPT_THRESHOLD_MS2 = 0.2       # Stehend
+# ==========================================
+# ROBUSTE STILLSTANDSERKENNUNG (ZUPT)
+# ==========================================
+USE_ZUPT = True                # ZUPT im Filter ein-/ausschalten
+OFFLINE_ZUPT_THRESHOLD = 0.05   # (g) Schwellenwert für gefilterte Beschleunigung
+OFFLINE_ZUPT_HP_CUTOFF = 0.01  # (Hz) Hochpass-Filter (entfernt 1g Schwerkraft)
+OFFLINE_ZUPT_LP_CUTOFF = 5.0   # (Hz) Tiefpass-Filter (glättet Sensorrauschen)
 
+ZUPT_UNCERTAINTY = 0.05        # (m/s) 
+ZARU_UNCERTAINTY = 0.02
 # ==========================================
 # MAGNETOMETER & 18-STATE ESKF
 # ==========================================
@@ -62,13 +66,11 @@ USE_MAGNETOMETER = False      # HAUPTSCHALTER
 USE_18_STATE_ESKF = False     # TOGGLE: True = In-Run Mag-Updates (18-State) | False = Nur Start-Heading (15-State)
 MAG_CALIB_FILE = "mag_param.json"
 
-# Referenz-Magnetfeld (z.B. Innsbruck: Inklination ca. 64°, Deklination ca. 3°)
-# Vektor in [Nord, Ost, Unten] bzw. an dein globales Koordinatensystem (Z=Up) angepasst:
-# N: 0.44, E: 0.02, U: -0.90 -> Bitte auf exakt 1.0 normieren!
-GLOBAL_MAG_REF = [0.44, 0.02, -0.90]  
+# Referenz-Magnetfeld laut NOAA-Kalkulator https://www.ngdc.noaa.gov/geomag/calculators/magcalc.shtml#igrfwmm normiert auf die Magnitude 1.0 im [Nord, Ost, Up] System
+GLOBAL_MAG_REF = [0.4649, -0.0195, -0.8852] 
 
-MAG_UNCERTAINTY = 0.01         # (Gauss) ca. 1-2% des Erdmagnetfelds
-MAG_BIAS_RW = 1e-5             # Random Walk für Mag-Bias (Wie schnell stört die Kletterwand?)
+MAG_UNCERTAINTY = 0.05         # (Gauss) 
+MAG_BIAS_RW = 1e-3             # Random Walk für Mag-Bias 
 
 # ==========================================
 # VISUALISIERUNG

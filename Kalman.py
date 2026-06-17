@@ -95,23 +95,28 @@ def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch):
             eskf.update_barometer(row['Altitude_filt [m]'])
             last_baro_time = current_baro_time
 
+        mag_magnitude = np.linalg.norm(mag_calib)
         if mag_in_run_active:
             current_mag_time = row['Mag_Time']
-            if pd.notna(current_mag_time) and current_mag_time != last_mag_time:
+            if pd.notna(current_mag_time) and current_mag_time != last_mag_time and abs(mag_magnitude - 1.0) < 0.1:
                 eskf.update_mag(mag_calib)
                 last_mag_time = current_mag_time
 
-        # 5. ZUPT, ZARU & Gravity Update 
-        acc_world = eskf.q.apply(acc_calib)
-        acc_magnitude = np.linalg.norm(acc_world + eskf.g)
-        
-        # Gyro-Magnitude in rad/s umrechnen für den Vergleich
-        gyro_magnitude = np.linalg.norm(gyro_calib) 
-        zaru_threshold_rads = getattr(config, 'STILLNESS_THRESHOLD', 2.0) * (np.pi / 180.0)
-        
+
+        # 5. ZUPT, ZARU & GRAVITY UPDATE 
         if getattr(config, 'USE_ZUPT', False):
-            # KRITISCHER CHECK: Beschleunigung ~ 1g UND keine Rotation!
-            if acc_magnitude < config.ZUPT_THRESHOLD_MS2 and gyro_magnitude < zaru_threshold_rads:
+            # 1. Instantane Magnituden OHNE Filterverzögerung für das aktuelle Sample berechnen
+            acc_world = eskf.q.apply(acc_calib)
+            acc_magnitude = np.linalg.norm(acc_world + eskf.g)
+            gyro_magnitude = np.linalg.norm(gyro_calib)
+            
+            # Schwellenwert aus der Config in rad/s umrechnen
+            zaru_threshold_rads = getattr(config, 'STILLNESS_THRESHOLD', 3.0) * (np.pi / 180.0)
+            
+            # 2. HYBRIDE ABFRAGE: 
+            # Die Offline-Maske MUSS True sagen, ABER wenn das Gyroskop oder die 
+            # Beschleunigung instantan ausschlagen, greift die Notbremse!
+            if row['Stationary'] == True and gyro_magnitude < zaru_threshold_rads and acc_magnitude < 0.4:
                 eskf.update_zupt()             # Killt Geschwindigkeits-Drift
                 eskf.update_zaru(gyro_calib)   # Killt Gyro/Yaw-Drift
                 eskf.update_gravity(acc_calib) # Begradigt den Horizont (Roll/Pitch)

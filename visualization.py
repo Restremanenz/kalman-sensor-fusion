@@ -89,9 +89,11 @@ class TrajectoryVisualizer:
 
         ani = animation.FuncAnimation(fig, update, frames=frames, interval=1000/self.fps, blit=False)
         self.animations.append(ani) 
+
     def plot_raw_sensor_data(self, df):
-        """Plottet die rohen IMU-Daten in zwei verknüpften Subplots."""
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
+        """Plottet die rohen IMU- und Magnetometer-Daten in drei verknüpften Subplots."""
+        
+        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
 
         # 1. Accelerometer Plot
         ax1.plot(df['Time'], df['A_x [g]'], label='A_x', color='#d62728', alpha=0.8) # Rot
@@ -106,12 +108,29 @@ class TrajectoryVisualizer:
         ax2.plot(df['Time'], df['G_x [dps]'], label='G_x', color='#d62728', alpha=0.8)
         ax2.plot(df['Time'], df['G_y [dps]'], label='G_y', color='#2ca02c', alpha=0.8)
         ax2.plot(df['Time'], df['G_z [dps]'], label='G_z', color='#1f77b4', alpha=0.8)
-        ax2.set_xlabel('Zeit [s]')
         ax2.set_ylabel('Drehgeschwindigkeit [dps]')
         ax2.set_title('Gyroskop Rohdaten')
         ax2.legend(loc='upper right')
         ax2.grid(True, linestyle='--', alpha=0.6)
 
+        # 3. Magnetometer Plot 
+        if 'M_x [G]' in df.columns:
+            ax3.plot(df['Time'], df['M_x [G]'], label='M_x', color='#d62728', alpha=0.8)
+            ax3.plot(df['Time'], df['M_y [G]'], label='M_y', color='#2ca02c', alpha=0.8)
+            ax3.plot(df['Time'], df['M_z [G]'], label='M_z', color='#1f77b4', alpha=0.8)
+            ax3.set_ylabel('Magnetische Induktion [G]')
+            ax3.set_title('Magnetometer Rohdaten')
+            ax3.legend(loc='upper right')
+            ax3.grid(True, linestyle='--', alpha=0.6)
+        else:
+            # Falls alte Logs ohne Mag geladen werden
+            ax3.text(0.5, 0.5, 'Keine Magnetometerdaten im DataFrame vorhanden', 
+                     horizontalalignment='center', verticalalignment='center', transform=ax3.transAxes)
+            ax3.set_ylabel('Magnetfeld [G]')
+
+        # Das X-Label gehört jetzt an die Achse des untersten Plots
+        ax3.set_xlabel('Zeit [s]')
+        
         plt.tight_layout()
         
     def plot_velocity(self, times, velocities):
