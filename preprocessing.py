@@ -2,6 +2,7 @@ import sys
 import numpy as np
 import pandas as pd
 from scipy.signal import butter, filtfilt
+import scipy.interpolate
 from scipy.spatial.transform import Rotation as R
 from visualization import TrajectoryVisualizer
 
@@ -21,12 +22,11 @@ class IMUPreprocessor:
         self.config = config
 
     def load_and_merge_data(self, reader):
-        """Lädt alle Sensoren, gleicht die Frequenzen an und merged die DataFrames."""
+        """Lädt alle Sensoren, interpoliert weich und merged die DataFrames."""
         print("Lade und synchronisiere Sensordaten...")
         df_acc = reader.get_sensor_data("lsm6dsv16x_acc").sort_values("Time")
         df_gyro = reader.get_sensor_data("lsm6dsv16x_gyro").sort_values("Time")
         df_baro = reader.get_sensor_data("lps22df_press").sort_values("Time")
-        df_mag = reader.get_sensor_data("lis2mdl_mag").sort_values("Time")
 
         # Auslesen der echten Frequenzen
         gyro_info = reader.get_sensor_info("lsm6dsv16x_gyro")
@@ -35,23 +35,52 @@ class IMUPreprocessor:
         baro_info = reader.get_sensor_info("lps22df_press")
         fs_baro = baro_info.get("measured_odr_hz", 25.0) if baro_info else 25.0
         
-        mag_info = reader.get_sensor_info("lis2mdl_mag")
-        fs_mag = mag_info.get("measured_odr_hz", 100.0) if mag_info else 100.0
-        
-        print(f" -> Sensor-Raten: IMU @ {fs_dynamisch:.1f} Hz | Baro @ {fs_baro:.1f} Hz | Mag @ {fs_mag:.1f} Hz")
-
         # Automatische Barometer-Spaltenerkennung
         original_press_col = [col for col in df_baro.columns if col != 'Time'][0]
         df_baro = df_baro.rename(columns={original_press_col: 'P [hPa]'})
-        df_baro['Baro_Time'] = df_baro['Time'] 
 
-        df_mag = reader.get_sensor_data("lis2mdl_mag").sort_values("Time")
-        df_mag['Mag_Time'] = df_mag['Time'] 
-
-        # Pandas Merge-Magie (Dual-Path Synchronisation)
+        # =========================================================
+        # 1. Master-Zeitachse aus Accel und Gyro bilden 
+        # (Beide laufen auf ~960Hz, hier reicht Nearest-Merge)
+        # =========================================================
         df_imu = pd.merge_asof(df_acc, df_gyro, on="Time", direction="nearest")
-        df_imu = pd.merge_asof(df_imu, df_baro, on="Time", direction="backward")
-        df_imu = pd.merge_asof(df_imu, df_mag, on="Time", direction="nearest")
+        master_time = df_imu['Time'].values
+
+        # =========================================================
+        # 2. Barometer: Lineare Interpolation + Trigger-Erhalt
+        # =========================================================
+        # WICHTIG: Originale Zeitstempel behalten, damit der Kalman-Filter nur 25x pro Sekunde updatet!
+        df_baro_trigger = pd.DataFrame({'Time': df_baro['Time'], 'Baro_Time': df_baro['Time']})
+        df_imu = pd.merge_asof(df_imu, df_baro_trigger, on="Time", direction="backward")
+        
+        # Echte lineare Interpolation der Messwerte (verhindert Treppenstufen für den Filter)
+        f_baro = scipy.interpolate.interp1d(df_baro['Time'], df_baro['P [hPa]'], kind='linear', bounds_error=False, fill_value="extrapolate")
+        df_imu['P [hPa]'] = f_baro(master_time)
+
+        # =========================================================
+        # 3. Magnetometer: Lineare Interpolation (falls vorhanden)
+        # =========================================================
+        try:
+            df_mag = reader.get_sensor_data("lis2mdl_mag").sort_values("Time")
+            mag_info = reader.get_sensor_info("lis2mdl_mag")
+            fs_mag = mag_info.get("measured_odr_hz", 100.0) if mag_info else 100.0
+            print(f" -> Sensor-Raten: IMU @ {fs_dynamisch:.1f} Hz | Baro @ {fs_baro:.1f} Hz | Mag @ {fs_mag:.1f} Hz")
+            
+            # Originale Zeitstempel als Trigger behalten (100 Hz Updates)
+            df_mag_trigger = pd.DataFrame({'Time': df_mag['Time'], 'Mag_Time': df_mag['Time']})
+            df_imu = pd.merge_asof(df_imu, df_mag_trigger, on="Time", direction="backward")
+            
+            # Interpolation der Magnetwerte in alle drei Dimensionen
+            f_mag_x = scipy.interpolate.interp1d(df_mag['Time'], df_mag['M_x [G]'], kind='linear', bounds_error=False, fill_value="extrapolate")
+            f_mag_y = scipy.interpolate.interp1d(df_mag['Time'], df_mag['M_y [G]'], kind='linear', bounds_error=False, fill_value="extrapolate")
+            f_mag_z = scipy.interpolate.interp1d(df_mag['Time'], df_mag['M_z [G]'], kind='linear', bounds_error=False, fill_value="extrapolate")
+            
+            df_imu['M_x [G]'] = f_mag_x(master_time)
+            df_imu['M_y [G]'] = f_mag_y(master_time)
+            df_imu['M_z [G]'] = f_mag_z(master_time)
+            
+        except ValueError:
+            print(f" -> Sensor-Raten: IMU @ {fs_dynamisch:.1f} Hz | Baro @ {fs_baro:.1f} Hz | Mag nicht gefunden")
 
         # Schließt Lücken am Rand des Datensatzes vor dem Filtern
         df_imu = df_imu.ffill().bfill()
