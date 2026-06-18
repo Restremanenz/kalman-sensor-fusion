@@ -74,6 +74,10 @@ def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch):
     last_baro_time = -1.0 
     last_mag_time = -1.0
     
+    is_climbing = True
+    peak_altitude = 0.0
+    final_baro_z = 0.0
+
     for i in range(init_idx, len(df_imu)):
         dt = times[i] - times[i-1]
         if dt <= 0: continue
@@ -92,10 +96,34 @@ def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch):
         eskf.predict(acc_calib, gyro_calib, dt)
         smoother.save_predict(eskf.kf.F, eskf.kf.P) # Speichert P_prior
         
-        # Updates ...
+        # --------------------------------------------------
+        # Peak-Erkennung und harter Schleifen-Abbruch
+        # --------------------------------------------------
+        current_alt = row['Altitude_filt [m]']
+        if current_alt > peak_altitude:
+            peak_altitude = current_alt  # Höchsten Punkt merken
+            
+        # Wenn wir z.B. 50cm vom Höchstpunkt abfallen -> Kletterer hängt im Seil!
+        if (peak_altitude - current_alt) > getattr(config, 'DESCENT_DETECTION_THRESHOLD', 0.5):
+            print(f" -> Info: Abseilen erkannt bei {current_alt:.1f}m (Peak war {peak_altitude:.1f}m). Beende Koppelnavigation!")
+            final_baro_z = current_alt  # Höhe festhalten
+            break  # <--- Bricht die For-Schleife SOFORT ab!
+            
+        final_baro_z = current_alt  # Wird aktualisiert, falls wir regulär ans Dateiende kommen
+
+        # --------------------------------------------------
+        # Barometer & Wand Update
+        # --------------------------------------------------
         current_baro_time = row['Baro_Time']
         if pd.notna(current_baro_time) and current_baro_time != last_baro_time:
             eskf.update_barometer(row['Altitude_filt [m]'])
+            
+            if getattr(config, 'USE_WALL_CONSTRAINT', False):
+                eskf.update_wall_constraint(
+                    normal_xy=config.WALL_NORMAL_XY, 
+                    inclination_deg=config.WALL_INCLINATION_DEG, 
+                    uncertainty=config.WALL_UNCERTAINTY
+                )
             last_baro_time = current_baro_time
 
         mag_magnitude = np.linalg.norm(mag_calib)
@@ -142,8 +170,8 @@ def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch):
 
         # Zwinge Z-Position auf exakte letzte Barometer-Messung
         if getattr(config, 'SMOOTH_TO_BARO_Z', False):
-            baro_end_z = df_imu['Altitude_filt [m]'].iloc[-1]
-            eskf.update_position_z(baro_end_z, uncertainty=0.001)
+            # Nutzt die Höhe aus dem exakten Moment des Schleifen-Abbruchs
+            eskf.update_position_z(final_baro_z, uncertainty=0.001)
             applied_boundary = True
 
         # Falls Bedingungen angewendet wurden, überschreiben wir den allerletzten Zustand im Smoother

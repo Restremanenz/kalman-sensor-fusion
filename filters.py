@@ -253,3 +253,35 @@ class FilterpyESKF:
         
         innovation = target_z - self.p[2]
         self._robust_update(z=innovation, H=H, R=np.array([[uncertainty**2]]))
+
+    def update_wall_constraint(self, normal_xy, inclination_deg, uncertainty=0.3):
+        """
+        Soft Constraint: Zwingt den Kletterer an die überhängende Wand (z.B. 5°).
+        normal_xy: Ein 2D-Vektor [nx, ny], der angibt, welche Richtung in der XY-Ebene 
+                   vom Startpunkt aus von der Wand WEG zeigt.
+        """
+        # 1. Normalenvektor normieren (falls man z.B. [1, 1] übergibt)
+        n = np.array(normal_xy, dtype=float)
+        n_norm = np.linalg.norm(n)
+        if n_norm < 1e-6:
+            return  # Ungültiger Vektor, abbruch
+        nx, ny = n / n_norm
+
+        # 2. Tangens des Überhangs berechnen (5° = 0.0874)
+        tan_theta = np.tan(np.radians(inclination_deg))
+
+        # 3. Messmatrix H aufbauen (Gleichung: nx*X + ny*Y - Z*tan(theta) = 0)
+        H = np.zeros((1, self.dim_x))
+        H[0, 0] = nx          # Ableitung nach Position X
+        H[0, 1] = ny          # Ableitung nach Position Y
+        H[0, 2] = -tan_theta  # Ableitung nach Position Z
+
+        # 4. Innovation berechnen
+        # Wie weit ist unsere aktuelle Position von der idealen 5°-Ebene entfernt?
+        current_val = nx * self.p[0] + ny * self.p[1] - self.p[2] * tan_theta
+        innovation = 0.0 - current_val # Zielwert ist exakt 0
+
+        # 5. Robustes Update ausführen
+        # Das Rauschen (uncertainty) wirkt wie ein Gummiband. 
+        # z.B. 0.3m bedeutet: Der Filter toleriert es, wenn der Kletterer sich leicht von der Wand wegdrückt.
+        self._robust_update(z=innovation, H=H, R=np.array([[uncertainty**2]]))
