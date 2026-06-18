@@ -236,3 +236,20 @@ class FilterpyESKF:
 
         innovation = a_dir - g_pred
         self._robust_update(z=innovation, H=H, R=self.R_grav)
+
+    def update_position_xy(self, target_xy, uncertainty=0.01):
+        """Boundary Update: Zwingt die X/Y Position auf einen Zielwert (z.B. Startwand)."""
+        H = np.zeros((2, self.dim_x))
+        H[0, 0] = 1.0  # Mapping auf State X
+        H[1, 1] = 1.0  # Mapping auf State Y
+        
+        innovation = target_xy - self.p[0:2]
+        self._robust_update(z=innovation, H=H, R=np.eye(2) * (uncertainty**2))
+
+    def update_position_z(self, target_z, uncertainty=0.01):
+        """Boundary Update: Zwingt die Z Position auf einen Zielwert (z.B. Baro-Endhöhe)."""
+        H = np.zeros((1, self.dim_x))
+        H[0, 2] = 1.0  # Mapping auf State Z
+        
+        innovation = target_z - self.p[2]
+        self._robust_update(z=innovation, H=H, R=np.array([[uncertainty**2]]))

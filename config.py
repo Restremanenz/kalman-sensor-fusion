@@ -1,7 +1,7 @@
 # ==========================================
 # DATEI- UND PFADEINSTELLUNGEN
 # ==========================================
-LOG_FOLDER = "./Data/lena4"
+LOG_FOLDER = "./Data/stair_foot_100"
 IMU_CALIB_FILE = "sensor_params.json"
 
 # ==========================================
@@ -14,9 +14,9 @@ MIN_STILL_SECONDS = 0.1        # Ruhesekunden
 MAX_PROCESS_TIME = None
 
 # ==========================================
-# POST-PROCESSING (Smoother)
+# POST-PROCESSING (RTS Smoother)
 # ==========================================
-USE_SMOOTHER = True            # Smoother ein-/ausschalten
+USE_SMOOTHER = False            # Smoother ein-/ausschalten
 
 # Positions-Ziele am Ende des Laufs
 SMOOTH_TO_BARO_Z = False        # Z-Achse an die exakt letzte Barometer-Höhe angleichen
@@ -27,7 +27,7 @@ TARGET_Y_M = 0.0               # (m) Ziel Y (0.0 = exakt über Start)
 # Geschwindigkeits-Ziele
 # VORSICHT: Nur auf True setzen, wenn der Run komplett bis zum Stillstand/Buzzer läuft!
 # Bei gekürzten Läufen (MAX_PROCESS_TIME) zwingend auf False lassen!
-FORCE_V_END_ZERO = True
+FORCE_V_END_ZERO = False
 
 # ==========================================
 # KALMAN FILTER TUNING 

@@ -6,9 +6,9 @@ from scipy.spatial.transform import Rotation as R
 import config  
 from st_log_reader import STLogReader
 from preprocessing import IMUPreprocessor
-from postprocessing import PostProcessor
 from visualization import TrajectoryVisualizer
 from filters import FilterpyESKF
+from smoother import ESKFSmoother  
 
 
 class IMUCalibration:
@@ -43,9 +43,7 @@ class IMUCalibration:
 
 
 def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch):
-    # Bestimme, ob der 18-State Modus wirklich aktiv sein darf
     mag_in_run_active = config.USE_MAGNETOMETER and config.USE_18_STATE_ESKF
-    
     print(f"Starte {'18-State' if mag_in_run_active else '15-State'} Error-State Kalman Filter...")
     
     eskf = FilterpyESKF(
@@ -64,10 +62,15 @@ def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch):
         mag_unc = config.MAG_UNCERTAINTY
     )
     
-    positions, orientations, velocities, times_plot = [], [], [], []
-    times = df_imu["Time"].values
+    # 1. INITIALISIERE DEN NEUEN SMOOTHER
+    smoother = ESKFSmoother(use_18_state=mag_in_run_active)
+    smoother.save_initial_state(
+        eskf.p, eskf.v, eskf.q, eskf.ba, eskf.bg, 
+        eskf.bm if mag_in_run_active else np.zeros(3), eskf.kf.P
+    )
 
-    # Zeit-Tracker für asynchrone Updates
+    times_plot = []
+    times = df_imu["Time"].values
     last_baro_time = -1.0 
     last_mag_time = -1.0
     
@@ -77,7 +80,6 @@ def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch):
             
         row = df_imu.iloc[i]
         
-        # 1. Daten holen & kalibrieren
         raw_acc = np.array([row['A_x [g]'], row['A_y [g]'], row['A_z [g]']]) 
         raw_gyro = np.array([row['G_x [dps]'], row['G_y [dps]'], row['G_z [dps]']]) 
         raw_mag = np.array([row['M_x [G]'], row['M_y [G]'], row['M_z [G]']])
@@ -86,10 +88,11 @@ def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch):
         gyro_calib = calib.calibrate_gyro(raw_gyro)
         mag_calib = calib.calibrate_mag(raw_mag)
 
-        # 2. ESKF Prediction (Koppelnavigation)
+        # 2. PREDICT UND SPEICHERN
         eskf.predict(acc_calib, gyro_calib, dt)
+        smoother.save_predict(eskf.kf.F, eskf.kf.P) # Speichert P_prior
         
-        # 3. Barometer Update (Asynchroner Trigger)
+        # Updates ...
         current_baro_time = row['Baro_Time']
         if pd.notna(current_baro_time) and current_baro_time != last_baro_time:
             eskf.update_barometer(row['Altitude_filt [m]'])
@@ -102,32 +105,61 @@ def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch):
                 eskf.update_mag(mag_calib)
                 last_mag_time = current_mag_time
 
-
-        # 5. ZUPT, ZARU & GRAVITY UPDATE 
         if getattr(config, 'USE_ZUPT', False):
-            # 1. Instantane Magnituden OHNE Filterverzögerung für das aktuelle Sample berechnen
             acc_world = eskf.q.apply(acc_calib)
             acc_magnitude = np.linalg.norm(acc_world + eskf.g)
             gyro_magnitude = np.linalg.norm(gyro_calib)
-            
-            # Schwellenwert aus der Config in rad/s umrechnen
             zaru_threshold_rads = getattr(config, 'STILLNESS_THRESHOLD', 3.0) * (np.pi / 180.0)
             
-            # 2. HYBRIDE ABFRAGE: 
-            # Die Offline-Maske MUSS True sagen, ABER wenn das Gyroskop oder die 
-            # Beschleunigung instantan ausschlagen, greift die Notbremse!
             if row['Stationary'] == True and gyro_magnitude < zaru_threshold_rads and acc_magnitude < 0.4:
-                eskf.update_zupt()             # Killt Geschwindigkeits-Drift
-                eskf.update_zaru(gyro_calib)   # Killt Gyro/Yaw-Drift
-                eskf.update_gravity(acc_calib) # Begradigt den Horizont (Roll/Pitch)
+                eskf.update_zupt()             
+                eskf.update_zaru(gyro_calib)   
+                eskf.update_gravity(acc_calib) 
 
-        # 6. Speichern
-        positions.append(eskf.p.copy())
-        orientations.append(eskf.q)
-        velocities.append(eskf.v.copy())
+        # 3. UPDATE SPEICHERN
+        smoother.save_update(
+            eskf.p, eskf.v, eskf.q, eskf.ba, eskf.bg, 
+            eskf.bm if mag_in_run_active else np.zeros(3), eskf.kf.P
+        )
         times_plot.append(times[i])
 
-    return np.array(positions), np.array(velocities), orientations, np.array(times_plot), eskf
+    # ==========================================================
+    # 4. BOUNDARY CONDITIONS ALS KALMAN-UPDATES & RTS SMOOTHING
+    # ==========================================================
+    if getattr(config, 'USE_SMOOTHER', False):
+        applied_boundary = False
+        
+        # Zwinge Velocity exakt auf 0 (Nur wenn komplett ausgelaufen)
+        if getattr(config, 'FORCE_V_END_ZERO', False) and getattr(config, 'MAX_PROCESS_TIME', None) is None:
+            eskf.update_zupt() 
+            applied_boundary = True
+
+        # Zwinge Position auf Startpunkt-Linie (z.B. für RTO)
+        if getattr(config, 'SMOOTH_XY_TO_ZERO', False):
+            target_xy = np.array([getattr(config, 'TARGET_X_M', 0.0), getattr(config, 'TARGET_Y_M', 0.0)])
+            eskf.update_position_xy(target_xy, uncertainty=0.001) # 1mm Unsicherheit -> Sehr hartes Update
+            applied_boundary = True
+
+        # Zwinge Z-Position auf exakte letzte Barometer-Messung
+        if getattr(config, 'SMOOTH_TO_BARO_Z', False):
+            baro_end_z = df_imu['Altitude_filt [m]'].iloc[-1]
+            eskf.update_position_z(baro_end_z, uncertainty=0.001)
+            applied_boundary = True
+
+        # Falls Bedingungen angewendet wurden, überschreiben wir den allerletzten Zustand im Smoother
+        if applied_boundary:
+            smoother.overwrite_last_update(
+                eskf.p, eskf.v, eskf.q, eskf.ba, eskf.bg, 
+                eskf.bm if mag_in_run_active else np.zeros(3), eskf.kf.P
+            )
+
+        # Starte den echten RTS-Rückwärtsdurchlauf
+        positions, velocities, orientations = smoother.smooth()
+    else:
+        # Falls Smoother aus ist, nutze die ungeschönten Vorwärts-Werte
+        positions, velocities, orientations = smoother.get_forward_states()
+
+    return positions, velocities, orientations, np.array(times_plot), eskf
 
 
 def main():
@@ -160,14 +192,6 @@ def main():
         df_imu, q_init, init_idx, calib, fs_dynamisch
     )
 
-    # ==============================================================
-    # 4. POST-PROCESSING (Boundary Condition Smoother)
-    # ==============================================================
-    if getattr(config, 'USE_SMOOTHER', False):
-        postprocessor = PostProcessor(config)
-        positions, velocities = postprocessor.apply_smoother(
-            positions, velocities, times, df_imu
-        )
 
     # ==============================================================
     # 5. VISUALISIERUNG
