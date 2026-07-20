@@ -1,6 +1,7 @@
 import sys
 import numpy as np
 import pandas as pd
+import ahrs
 from scipy.signal import butter, filtfilt
 import scipy.interpolate
 from scipy.spatial.transform import Rotation as R
@@ -124,56 +125,122 @@ class IMUPreprocessor:
         
         return df_init, init_end_idx
 
-    def initialize_run(self, df_init, calib):
-        # 1. Gyro Bias berechnen
+    def get_initial_alignment(self, df_imu, calib, fs_dynamisch):
+        fs = fs_dynamisch
+        
+        if getattr(self.config, 'USE_DYNAMIC_ALIGNMENT', False):
+            print("🚀 Nutze Retrograde Dynamic Alignment (Madgwick)...")
+            
+            # ====================================================================
+            # 🔥 FIX 1: Gyro-Bias retten!
+            # Wir suchen erst die ECHTE Ruhephase, ABER NUR um das Gyro zu nullen!
+            # ====================================================================
+            df_still, _ = self.find_initial_stillness(df_imu, fs)
+            raw_gyros_still = df_still[['G_x [dps]', 'G_y [dps]', 'G_z [dps]']].values
+            calib.gyro_bias = np.mean(raw_gyros_still, axis=0)
+            print(f" -> Gyro-Bias erfolgreich aus echter Ruhephase berechnet.")
+
+            # 1. Start-Explosion finden 
+            # 🔥 FIX 2: Schwellenwert senken, damit wir nicht schon mitten im Klettern sind!
+            acc_mag = np.sqrt(df_imu['A_x [g]']**2 + df_imu['A_y [g]']**2 + df_imu['A_z [g]']**2).values
+            threshold = getattr(self.config, 'START_PEAK_THRESHOLD_G', 1.2) # <--- Von 1.5 auf 1.2 gesenkt!
+            peaks = np.where(acc_mag > threshold)[0]
+            
+            if len(peaks) == 0:
+                print(" -> WARNUNG: Kein Start-Peak gefunden! Falle auf Static Leveling zurück.")
+                df_init, init_idx = self.find_initial_stillness(df_imu, fs)
+                q_init, P0, _ = self._static_leveling_alignment(df_init, calib)
+                return q_init, P0, init_idx
+            
+            start_idx = peaks[0] 
+            
+            # 🔥 FIX 3: Den Sicherheitsabstand (Buffer) erhöhen!
+            # Wir gehen 1.0 Sekunden vor dem Peak zurück (statt 0.3s), 
+            # damit wir GANZ SICHER vor der Muskelanspannung des Kletterers landen.
+            buffer_samples = int(getattr(self.config, 'WARMUP_BUFFER_SEC', 1.0) * fs)
+            warmup_samples = int(getattr(self.config, 'WARMUP_WINDOW_SEC', 3.0) * fs)
+            
+            warmup_end_idx = start_idx - buffer_samples
+            warmup_start_idx = warmup_end_idx - warmup_samples
+            
+            # ... AB HIER GEHT ES EXAKT SO WEITER WIE IN DEINEM AKTUELLEN CODE ...
+            # df_warmup = df_imu.iloc[warmup_start_idx:warmup_end_idx]
+            # ...
+            
+            # 3. Warm-Up Daten extrahieren
+            df_warmup = df_imu.iloc[warmup_start_idx:warmup_end_idx]
+            
+            # Wasserwaage für das erste Frame des Warmups
+            q_base, P0, _ = self._static_leveling_alignment(df_warmup.head(int(0.5 * fs)), calib)
+            q_base_scipy = q_base.as_quat()
+            q_base_ahrs = np.array([q_base_scipy[3], q_base_scipy[0], q_base_scipy[1], q_base_scipy[2]])
+            
+            gyro_data = df_warmup[['G_x [dps]', 'G_y [dps]', 'G_z [dps]']].values
+            acc_data = df_warmup[['A_x [g]', 'A_y [g]', 'A_z [g]']].values
+            
+            gyro_rad = np.deg2rad(gyro_data - calib.gyro_bias)
+            acc_calib = np.array([calib.calibrate_acc(a) for a in acc_data])
+            
+            # 4. Madgwick vorschalten
+            madgwick = ahrs.filters.Madgwick(gain=0.05, frequency=fs)
+            Q = np.zeros((len(gyro_rad), 4))
+            Q[0] = q_base_ahrs 
+            
+            for i in range(1, len(gyro_rad)):
+                Q[i] = madgwick.updateIMU(Q[i-1], gyr=gyro_rad[i], acc=acc_calib[i])
+                
+            final_q_madgwick = Q[-1] 
+            q_init = R.from_quat([final_q_madgwick[1], final_q_madgwick[2], final_q_madgwick[3], final_q_madgwick[0]])
+            
+            print(f" -> Dynamisches Alignment beendet. ESKF übernimmt bei {start_idx/fs:.2f}s")
+            return q_init, P0, start_idx
+            
+        else:
+            print("⚓ Nutze Static Leveling Alignment (Wasserwaage)...")
+            # ====================================================================
+            # 🔥 HIER IST DIE KORREKTUR:
+            # Wir rufen deine originale Suchfunktion auf. Das repariert folgendes:
+            # 1. Der Init-Plot wird wieder gezeichnet.
+            # 2. Es wird eine *echte* Ruhephase gesucht (maximale Genauigkeit).
+            # ====================================================================
+            df_init, init_idx = self.find_initial_stillness(df_imu, fs)
+            
+            # Jetzt berechnen wir das static leveling mit den echten, sauberen Ruhedaten
+            q_init, P0, _ = self._static_leveling_alignment(df_init, calib)
+            
+            # Wir geben den originalen init_idx zurück, damit der Kalman-Filter 
+            # exakt nach der gefundenen Ruhephase startet (wie in deinem alten Code!)
+            return q_init, P0, init_idx
+    def _static_leveling_alignment(self, df_init, calib):
+        """Deine vorherige, perfekte Wasserwaagen-Methode als Helper-Funktion ausgelagert."""
+        # 1. Gyro Bias berechnen (Darf hier live berechnet werden, weil Sensor echt ruht!)
         raw_gyros_init = df_init[['G_x [dps]', 'G_y [dps]', 'G_z [dps]']].values
         calib.gyro_bias = np.mean(raw_gyros_init, axis=0)
 
-        # 2. Beschleunigung auswerten (Schwerkraft-Vektor)
+        # 2. Beschleunigung auswerten (Wasserwaage)
         raw_accs_init = df_init[['A_x [g]', 'A_y [g]', 'A_z [g]']].values
         accs_init_calib = np.array([calib.calibrate_acc(a) for a in raw_accs_init])
         mean_acc = np.mean(accs_init_calib, axis=0)
         v_acc_body = mean_acc / np.linalg.norm(mean_acc)
 
+        v2 = np.array([0.0, 0.0, 1.0])
+        axis = np.cross(v_acc_body, v2)
+        axis_norm = np.linalg.norm(axis)
         
-        if self.config.USE_MAGNETOMETER and 'M_x [G]' in df_init.columns:
-            print(" -> Initialisierung: Nutze Beschleunigung & Magnetometer für echtes Start-Heading.")
-            raw_mags_init = df_init[['M_x [G]', 'M_y [G]', 'M_z [G]']].values
-            mags_init_calib = np.array([calib.calibrate_mag(m) for m in raw_mags_init])
-            mean_mag = np.mean(mags_init_calib, axis=0)
-            v_mag_body = mean_mag / np.linalg.norm(mean_mag)
-
-            g_global_expected = np.array([0.0, 0.0, 1.0])
-            mag_global_expected = np.array(self.config.GLOBAL_MAG_REF)
-            mag_global_expected /= np.linalg.norm(mag_global_expected)
-
-            # Wahba's Problem lösen (Kombination aus Acc und Mag)
-            q_init, _ = R.align_vectors(
-                a=[g_global_expected, mag_global_expected],
-                b=[v_acc_body, v_mag_body],
-                weights=[1.0, 0.2]
-            )
+        if axis_norm > 1e-6:
+            axis = axis / axis_norm
+            angle = np.arccos(np.clip(np.dot(v_acc_body, v2), -1.0, 1.0))
+            q_level = R.from_rotvec(axis * angle)
         else:
-            print(" -> Initialisierung: Magnetometer DEAKTIVIERT. Nutze reine Wasserwaage (Yaw = 0).")
-            # Reine Schwerkraft-Ausrichtung (Exakt wie in deinem allerersten Code!)
-            v1 = v_acc_body
-            v2 = np.array([0.0, 0.0, 1.0])
-            axis = np.cross(v1, v2)
-            axis_norm = np.linalg.norm(axis)
-            
-            if axis_norm > 1e-6:
-                axis = axis / axis_norm
-                angle = np.arccos(np.clip(np.dot(v1, v2), -1.0, 1.0))
-                q_init = R.from_rotvec(axis * angle)
-            else:
-                q_init = R.from_quat([0,0,0,1])
+            q_level = R.from_quat([0,0,0,1])
 
-        # 5. Barometer Basisdruck
-        P0 = df_init['P [hPa]'].mean()
-        print(f" -> Kalibrierter Basisdruck P0: {P0:.2f} hPa")
+        q_init = q_level 
         
-        return q_init, P0
-
+        P0 = df_init['P [hPa]'].mean()
+        init_idx = len(df_init) 
+        
+        return q_init, P0, init_idx
+    
     def process_barometer_and_crop(self, df_imu, P0, init_end_idx, fs_dynamisch):
         """Berechnet die Höhe, wendet Zero-Phase Filter an, tariert und kürzt ggf. den Datensatz."""
         # 1. Höhe berechnen

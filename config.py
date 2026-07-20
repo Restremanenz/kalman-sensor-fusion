@@ -1,17 +1,28 @@
 # ==========================================
 # DATEI- UND PFADEINSTELLUNGEN
 # ==========================================
-LOG_FOLDER = "./Data/lena4"
+LOG_FOLDER = "./Data/Lena4"
 IMU_CALIB_FILE = "sensor_params.json"
 
 # ==========================================
 # ABLAUF-STEUERUNG & INITIALISIERUNG
 # ==========================================
-USE_AUTO_INIT = True           # Start Ruhephase suchen
-STILLNESS_THRESHOLD = 4.0      # Drehgeschwindigkeit
+USE_AUTO_INIT = True           # Start Ruhephase suchen   Hauptschalter
+STILLNESS_THRESHOLD = 2.0      # Drehgeschwindigkeit
 MIN_STILL_SECONDS = 0.1        # Ruhesekunden
 
 MAX_PROCESS_TIME = None
+
+# ==========================================
+# ALIGNMENT & INITIALISIERUNG (START-PHASE)
+# ==========================================
+# Toggle: True = Retrograder Madgwick (Dynamisch), False = Static Leveling (Wasserwaage)
+USE_DYNAMIC_ALIGNMENT = True    
+
+# Parameter für das dynamische Alignment (wenn True)
+START_PEAK_THRESHOLD_G = 3    # (g) Ab dieser Beschleunigung gilt der Athlet als gestartet
+WARMUP_WINDOW_SEC = 4.0         # (s) Dauer der Madgwick-Einschwingphase vor dem Start
+WARMUP_BUFFER_SEC = 0.9         # (s) Sicherheitsabstand vom Start-Peak zurück (Vermeidet Fliehkräfte am Ende)
 
 # ==========================================
 # POST-PROCESSING (RTS Smoother)
@@ -94,7 +105,7 @@ MAG_BIAS_RW = 1e-3             # Random Walk für Mag-Bias
 # VISUALISIERUNG
 # ==========================================
 ANIMATION_FPS = 30
-SHOW_RAW_SENSOR_DATA = False
+SHOW_RAW_SENSOR_DATA = True
 SHOW_VELOCITY = True   
-SHOW_ALTITUDE = False        
-SHOW_INIT_PLOT = False  
+SHOW_ALTITUDE = True        
+SHOW_INIT_PLOT = True  

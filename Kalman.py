@@ -203,12 +203,28 @@ def main():
     # ==============================================================
     # 2. PRE-PROCESSING (Initialisierung & Barometer)
     # ==============================================================
-    if config.USE_AUTO_INIT:
-        df_init, init_idx = preprocessor.find_initial_stillness(df_imu, fs_dynamisch)
-        q_init, P0 = preprocessor.initialize_run(df_init, calib)
+    if getattr(config, 'USE_AUTO_INIT', True):
+        q_init, P0, init_idx = preprocessor.get_initial_alignment(df_imu, calib, fs_dynamisch)
+
+        # ==============================================================
+        # AUSGABE FÜR DEN VERGLEICH 
+        # ==============================================================
+        euler_deg = q_init.as_euler('xyz', degrees=True) # Umrechnung in Grad
+        gravity_body = q_init.inv().apply([0.0, 0.0, 1.0]) # Berechnung des Vektors
+
+        print("\n" + "="*55)
+        print("🎯 INITIAL ALIGNMENT VERGLEICH")
+        print("="*55)
+        print(f"Methode:      {'Dynamisch (Madgwick)' if getattr(config, 'USE_DYNAMIC_ALIGNMENT', False) else 'Statisch (Wasserwaage)'}")
+        print(f"Start-Index:  {init_idx}")
+        print(f"Winkel:       Roll: {euler_deg[0]:.2f}° | Pitch: {euler_deg[1]:.2f}° | Yaw: {euler_deg[2]:.2f}°")
+        print(f"Schwerkraft:  [X: {gravity_body[0]:.4f}g | Y: {gravity_body[1]:.4f}g | Z: {gravity_body[2]:.4f}g]")
+        print("="*55 + "\n")
     else:
         print("WARNUNG: Auto-Init deaktiviert. Starte unkalibriert.")
-        init_idx, P0, q_init = 1, df_imu['P [hPa]'].iloc[0], R.from_quat([0,0,0,1])
+        init_idx = 1
+        P0 = df_imu['P [hPa]'].iloc[0]
+        q_init = R.from_quat([0, 0, 0, 1])
 
     # Höhenberechnung, Zero-Phase Filter, Tare & Data-Cropping
     df_imu = preprocessor.process_barometer_and_crop(df_imu, P0, init_idx, fs_dynamisch)
