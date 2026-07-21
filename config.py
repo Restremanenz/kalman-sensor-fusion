@@ -1,7 +1,7 @@
 # ==========================================
 # DATEI- UND PFADEINSTELLUNGEN
 # ==========================================
-LOG_FOLDER = "./Data/Lena4"
+LOG_FOLDER = "./Data/7sek"
 IMU_CALIB_FILE = "sensor_params.json"
 
 # ==========================================
@@ -20,14 +20,20 @@ MAX_PROCESS_TIME = None
 USE_DYNAMIC_ALIGNMENT = True    
 
 # Parameter für das dynamische Alignment (wenn True)
-START_PEAK_THRESHOLD_G = 3    # (g) Ab dieser Beschleunigung gilt der Athlet als gestartet
+START_PEAK_THRESHOLD_G = 2    # (g) Ab dieser Beschleunigung gilt der Athlet als gestartet
 WARMUP_WINDOW_SEC = 4.0         # (s) Dauer der Madgwick-Einschwingphase vor dem Start
-WARMUP_BUFFER_SEC = 0.9         # (s) Sicherheitsabstand vom Start-Peak zurück (Vermeidet Fliehkräfte am Ende)
+WARMUP_BUFFER_SEC = 0.4         # (s) Sicherheitsabstand vom Start-Peak zurück (Vermeidet Fliehkräfte am Ende)
+
+# ==============================================================
+# END-DETECTION (Ziel-Erkennung)
+# ==============================================================
+USE_END_DETECTION = True             
+FREEFALL_THRESHOLD_G = 0.3           # Unter 0.6g werten wir als "Losgelassen / Freier Fall"
 
 # ==========================================
 # POST-PROCESSING (RTS Smoother)
 # ==========================================
-USE_SMOOTHER = False            # Smoother ein-/ausschalten
+USE_SMOOTHER = True            # Smoother ein-/ausschalten
 
 # Positions-Ziele am Ende des Laufs
 SMOOTH_TO_BARO_Z = False        # Z-Achse an die exakt letzte Barometer-Höhe angleichen

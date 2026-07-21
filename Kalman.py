@@ -78,11 +78,88 @@ def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch):
     peak_altitude = 0.0
     final_baro_z = 0.0
 
-    for i in range(init_idx, len(df_imu)):
+    # =================================================================
+    # 🏁 PRE-COMPUTE END INDEX (Sensor-Fusion: Baro + Accel)
+    # =================================================================
+    end_idx = len(df_imu)
+    
+    if getattr(config, 'USE_END_DETECTION', False):
+        print("🔍 Suche nach Ziel-Buzzer (Baro + Accel Fusion)...")
+        # 1. Grobe Suche: Höchster Punkt laut gefiltertem Barometer (nach dem Start)
+        altitudes = df_imu['Altitude_filt [m]'].values
+        baro_peak_idx = init_idx + np.argmax(altitudes[init_idx:])
+        
+        # 2. Feine Suche: Finde den Moment des Loslassens (Freier Fall) 
+        # Wir suchen in einem Zeitfenster von 2 Sekunden nach dem Baro-Peak
+        search_start = baro_peak_idx - int(0.5 * fs_dynamisch) # 0.5s Toleranz vor dem Peak
+        search_end = min(len(df_imu), baro_peak_idx + int(2.5 * fs_dynamisch)) 
+        
+        acc_mag = np.sqrt(df_imu['A_x [g]']**2 + df_imu['A_y [g]']**2 + df_imu['A_z [g]']**2).values
+        
+        # Suchen, wann die Beschleunigung unter den Schwellenwert (z.B. 0.6g) fällt
+        freefall_indices = np.where(acc_mag[search_start:search_end] < getattr(config, 'FREEFALL_THRESHOLD_G', 0.6))[0]
+        
+        if len(freefall_indices) > 0:
+            # Der exakte Index kurz bevor der freie Fall beginnt
+            end_idx = search_start + freefall_indices[0]
+            print(f" -> 🎯 Ziel exakt erkannt! Baro-Peak bei {times[baro_peak_idx]:.2f}s | Freier Fall ins Seil beginnt bei {times[end_idx]:.2f}s")
+            final_baro_z = altitudes[baro_peak_idx] # Für das Smoother-Boundary Update
+        else:
+            # Fallback, falls der Kletterer langsam abklettert (kein freier Fall)
+            end_idx = baro_peak_idx
+            print(f" -> 🎯 Ziel via Baro-Peak bei {times[end_idx]:.2f}s erkannt (Kein freier Fall detektiert).")
+            final_baro_z = altitudes[baro_peak_idx]
+    # =================================================================
+    # ⏱️ LAUFZEIT BERECHNEN (Speedklettern)
+    # =================================================================
+    if getattr(config, 'USE_END_DETECTION', False):
+        start_time = times[init_idx]
+        # Falls end_idx das Ende des Arrays erreicht hat, nehmen wir den letzten gültigen Index (-1)
+        valid_end_idx = end_idx if end_idx < len(times) else len(times) - 1
+        end_time = times[valid_end_idx]
+        
+        run_time = end_time - start_time
+        
+        print("\n" + "="*55)
+        print("⏱️ SPEEDKLETTERN - LAUFZEIT-ANALYSE")
+        print("="*55)
+        print(f" -> Start-Zeitpunkt: {start_time:.3f} s (Index {init_idx})")
+        print(f" -> Ziel-Zeitpunkt:  {end_time:.3f} s (Index {valid_end_idx})")
+        print(f" -> NETTO-LAUFZEIT:  {run_time:.3f} Sekunden")
+        print("="*55 + "\n")        
+
+    for i in range(1, end_idx):
         dt = times[i] - times[i-1]
         if dt <= 0: continue
             
         row = df_imu.iloc[i]
+        
+        # =================================================================
+        # 🛡️ PRE-FLIGHT MASKING: Vor dem Startpunkt wird NICHT integriert!
+        # =================================================================
+        if i < init_idx:
+            # Damit Baro/Mag-Timer synchron bleiben, wenn der Start ertönt:
+            current_baro_time = row['Baro_Time']
+            if pd.notna(current_baro_time): last_baro_time = current_baro_time
+            if mag_in_run_active:
+                current_mag_time = row['Mag_Time']
+                if pd.notna(current_mag_time): last_mag_time = current_mag_time
+
+            # Wir füttern den Smoother künstlich mit Nullen (v=0, p=0, Orientierung=q_init)
+            smoother.save_predict(eskf.kf.F, eskf.kf.P) 
+            smoother.save_update(
+                np.zeros(3),        # Position bleibt hart auf [0,0,0]
+                np.zeros(3),        # Geschwindigkeit bleibt hart auf [0,0,0]
+                q_init,             # Orientierung ist exakt die Start-Ausrichtung
+                eskf.ba, eskf.bg, eskf.bm if mag_in_run_active else np.zeros(3), 
+                eskf.kf.P
+            )
+            times_plot.append(times[i])
+            continue  # <-- Springt zur nächsten Zeile, der ESKF wird komplett ignoriert!
+        
+        # =================================================================
+        # AB HIER: NORMALE ESKF KOPPELNAVIGATION (i >= init_idx)
+        # =================================================================
         
         raw_acc = np.array([row['A_x [g]'], row['A_y [g]'], row['A_z [g]']]) 
         raw_gyro = np.array([row['G_x [dps]'], row['G_y [dps]'], row['G_z [dps]']]) 
@@ -244,7 +321,7 @@ def main():
     vis = TrajectoryVisualizer(animation_fps=config.ANIMATION_FPS)
     
     vis.plot_static_trajectory(positions)
-    vis.plot_animated_trajectory(positions, orientations, fs_dynamisch)
+    # vis.plot_animated_trajectory(positions, orientations, fs_dynamisch)
 
     if getattr(config, 'SHOW_VELOCITY', False):
         vis.plot_velocity(times, velocities)
@@ -252,15 +329,13 @@ def main():
         vis.plot_raw_sensor_data(df_imu)
     if getattr(config, 'SHOW_ALTITUDE', False):
         vis.plot_altitude(df_imu)
-    if getattr(config, 'SHOW_FILTER_TUNING', False) and getattr(config, 'USE_PRE_FILTER', False):
-        vis.plot_raw_vs_filtered(df_imu, axis='z', zoom_start=0.0, zoom_end=10.0)
 
     vis.show_all()
     
     print(f"\n[INFO] Finaler In-Run Bias Schätzwert:")
     print(f"Gyro Bias (bg): {eskf.bg}")
     print(f"Accel Bias (ba): {eskf.ba}")
-    print(f"Accel Bias (bm): {eskf.bm}")
+    print(f"Mag Bias (bm): {eskf.bm}")
 
 if __name__ == "__main__":
     main()
