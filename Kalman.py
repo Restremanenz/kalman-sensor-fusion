@@ -23,7 +23,7 @@ class IMUCalibration:
             
             # 2. Gyroskop Parameter laden
             self.gyro_bias = np.array(data["gyro"]["offset_b"])
-            self.gyro_noise_std = np.array(data["gyro"]["noise_std"]) * (np.pi / 180.0)
+            self.gyro_noise_std = np.array(config.GYRO_NOISE_STD)
 
             # 3. Magnetometer Parameter laden
             self.mag_bias = np.array(data["mag"]["offset_b"])
@@ -51,7 +51,7 @@ def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch, verbose=Tru
         initial_q = q_init, 
         gyro_noise_std = calib.gyro_noise_std,
         accel_noise = config.ACCEL_NOISE_DENSITY,
-        bg_rw = config.GYRO_BIAS_RW, 
+        bg_rw = np.array(config.GYRO_BIAS_RW), 
         ba_rw = config.ACCEL_BIAS_RW, 
         grav_unc = config.GRAVITY_UNCERTAINTY,
         zupt_unc = config.ZUPT_UNCERTAINTY,
@@ -281,8 +281,8 @@ def find_best_yaw_and_smooth(df_imu, q_init, init_idx, calib, fs_dynamisch):
     min_lateral_variance = float('inf')
     best_res = None
     
-    # Raten in 2-Grad-Schritten (Kompensiert +/- 45 Grad Sensorverdrehung am Gurt)
-    test_angles = np.arange(-45, 46, 2)
+    # Raten in 2-Grad-Schritten (Kompensiert +/- 90 Grad Sensorverdrehung am Gurt)
+    test_angles = np.arange(-180, 181, 5)
     
     print("\n" + "="*55)
     print(f"🚀 STARTE YAW-GRID-SEARCH ({len(test_angles)} Durchläufe)...")

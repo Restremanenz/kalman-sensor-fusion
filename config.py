@@ -1,7 +1,7 @@
 # ==========================================
 # DATEI- UND PFADEINSTELLUNGEN
 # ==========================================
-LOG_FOLDER = "./Data/7sek"
+LOG_FOLDER = "./Data/8sek"
 IMU_CALIB_FILE = "sensor_params.json"
 
 # ==========================================
@@ -79,10 +79,14 @@ ACCEL_NOISE_DENSITY = 0.05      # (m/s^2) Je höher, desto mehr vertraut der Fil
 # Messrauschen (R)
 GRAVITY_UNCERTAINTY = 0.5      # (m/s^2) 
 
+# Allan Variance Parameter
+# Weißes Rauschen (Angle Random Walk) in rad/s
+GYRO_NOISE_STD = [4.752365e-05, 5.086460e-05, 3.940751e-05]
+
 # Bias Instability (Random Walk) 
 # Erlaubt dem Filter, den Gyro- und Accel-Bias während des Laufs anzupassen
 ACCEL_BIAS_RW = 1e-4           # Wie schnell darf sich der Accel-Bias ändern?
-GYRO_BIAS_RW = 1e-5            # Wie schnell darf sich der Gyro-Bias ändern?
+GYRO_BIAS_RW = [3.937686e-06, 6.420872e-06, 9.472721e-06]
 
 # ==========================================
 # ROBUSTE STILLSTANDSERKENNUNG (ZUPT)
