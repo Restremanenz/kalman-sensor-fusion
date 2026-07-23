@@ -285,11 +285,18 @@ def main():
     # 5. VISUALISIERUNG
     # ==============================================================
     print("Bereite finale 3D-Plots vor...")
-    vis = TrajectoryVisualizer(animation_fps=config.ANIMATION_FPS)
     
-    vis.plot_static_trajectory(positions)
-    # vis.plot_animated_trajectory(positions, orientations, fs_dynamisch)
-
+    vis = TrajectoryVisualizer(config=config)
+    
+    # Plots basierend auf der config.py steuern
+    if getattr(config, 'SHOW_3D_TRAJECTORY', True):
+        vis.plot_static_trajectory(positions)
+    if getattr(config, 'SHOW_ANIMATED_TRAJECTORY', False):
+        vis.plot_animated_trajectory(positions, orientations, fs_dynamisch)
+    if getattr(config, 'SHOW_2D_FRONT', True):
+        vis.plot_2d_wall_with_trajectory(positions, velocities)    
+    if getattr(config, 'SHOW_2D_SIDE', True):
+        vis.plot_2d_side_view_with_trajectory(positions, velocities)
     if getattr(config, 'SHOW_VELOCITY', False):
         vis.plot_velocity(times, velocities)
     if getattr(config, 'SHOW_RAW_SENSOR_DATA', False):

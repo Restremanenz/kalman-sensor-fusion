@@ -2,13 +2,16 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from matplotlib.collections import LineCollection
 
 class TrajectoryVisualizer:
     """Kapselt alle Matplotlib-Plots und 3D-Animationen"""
     
-    def __init__(self, animation_fps=30):
-        self.fps = animation_fps
-        self.animations = [] 
+    def __init__(self, config):
+        # Konfiguration als Instanzvariable speichern
+        self.config = config
+        self.fps = getattr(config, 'ANIMATION_FPS', 30)
+        self.animations = []
 
     def plot_auto_init(self, df_plot, gyro_mag_plot, df_init, gyro_mag_init, threshold):
         """Zeigt den Plot zur Überprüfung der gefundenen Ruhephase an."""
@@ -176,3 +179,133 @@ class TrajectoryVisualizer:
     def show_all(self):
         """Öffnet alle vorbereiteten Fenster gleichzeitig."""
         plt.show()
+
+    def plot_2d_wall_with_trajectory(self, positions, velocities):
+        """
+        Erstellt einen 2D-Plot (Frontalansicht: Y-Achse = Breite, Z-Achse = Höhe).
+        Nutzt Parameter aus der globalen config.py.
+        """
+        fig, ax = plt.subplots(figsize=(5, 12)) 
+        
+        image_path = getattr(self.config, 'VIS_WALL_BG_IMAGE', "speedwall_2D.png")
+        wall_length = getattr(self.config, 'VIS_WALL_LENGTH', 15.0)
+
+        try:
+            img = plt.imread(image_path)
+            extent = [-1.5, 1.5, 0.0, wall_length]
+            ax.imshow(img, extent=extent, origin='lower', alpha=0.6)
+            print("[INFO] 2D-Hintergrundbild der Speedwand erfolgreich geladen.")
+        except Exception as e:
+            print(f"[WARNUNG] Konnte Hintergrundbild ({image_path}) nicht laden: {e}")
+
+        # Sensordaten anpassen (Kopie!)
+        plot_pos = positions.copy()
+
+        if getattr(self.config, 'VIS_MIRROR_Y', True):
+            plot_pos[:, 1] = -plot_pos[:, 1]
+
+        plot_pos[:, 1] += getattr(self.config, 'VIS_SENSOR_OFFSET_Y', 0.3)
+        plot_pos[:, 2] += getattr(self.config, 'VIS_SENSOR_START_Z', 1.1)
+
+        # Geschwindigkeit berechnen
+        v_abs = np.linalg.norm(velocities, axis=1)
+        points = np.array([plot_pos[:, 1], plot_pos[:, 2]]).T.reshape(-1, 1, 2)
+        segments = np.concatenate([points[:-1], points[1:]], axis=1)
+        v_abs_segments = (v_abs[:-1] + v_abs[1:]) / 2.0 
+
+        # Farbige Linie
+        colormap = getattr(self.config, 'VIS_COLORMAP', 'turbo')
+        norm = plt.Normalize(v_abs_segments.min(), v_abs_segments.max())
+        lc = LineCollection(segments, cmap=colormap, norm=norm)
+        lc.set_array(v_abs_segments)
+        lc.set_linewidth(3.5)
+
+        line = ax.add_collection(lc)
+        cbar = fig.colorbar(line, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label('Absolute Geschwindigkeit [m/s]', rotation=270, labelpad=15)
+        
+        ax.scatter(plot_pos[0, 1], plot_pos[0, 2], color='green', s=120, zorder=5, label='Start', edgecolors='white')
+        ax.scatter(plot_pos[-1, 1], plot_pos[-1, 2], color='red', s=120, zorder=5, label='Ende', edgecolors='white')
+
+        ax.set_aspect('equal')
+        ax.set_xlim([-1.8, 1.8])
+        ax.set_ylim([-0.5, wall_length + 0.5])
+        
+        ax.set_xlabel('Y-Achse (Breite) [m]')
+        ax.set_ylabel('Z-Achse (Höhe) [m]')
+        ax.set_title('2D Speedwand-Analyse (Frontalansicht)')
+        
+        ax.legend(loc='upper left')
+        ax.grid(True, linestyle='--', alpha=0.3)
+        plt.tight_layout()
+
+    def plot_2d_side_view_with_trajectory(self, positions, velocities):
+        """
+        Erstellt einen 2D-Plot der Seitenansicht (X-Achse = Tiefe, Z-Achse = Höhe).
+        Nutzt Parameter aus der globalen config.py und spiegelt die Ansicht bei Bedarf.
+        """
+        fig, ax = plt.subplots(figsize=(5, 12)) 
+        
+        plot_pos = positions.copy()
+        
+        # -- NEU: Spiegelung und Wand-Richtung --
+        if getattr(self.config, 'VIS_MIRROR_X', True):
+            # Kletterer in den positiven Bereich (+X) spiegeln
+            plot_pos[:, 0] = -plot_pos[:, 0]
+            # Wand muss nach rechts (+X) überhängen, um über dem Kletterer zu sein
+            wall_direction = 1.0  
+        else:
+            # Originaldaten belassen (-X)
+            # Wand muss nach links (-X) überhängen
+            wall_direction = -1.0 
+            
+        # Offsets anwenden
+        plot_pos[:, 2] += getattr(self.config, 'VIS_SENSOR_START_Z', 1.1)
+        plot_pos[:, 0] += getattr(self.config, 'VIS_SENSOR_OFFSET_X', 0.2)
+
+        wall_length = getattr(self.config, 'VIS_WALL_LENGTH', 15.0)
+        wall_thickness = getattr(self.config, 'VIS_WALL_THICKNESS', 0.10)
+        angle_rad = np.radians(getattr(self.config, 'WALL_INCLINATION_DEG', 5.0))
+        
+        # Wand berechnen (nutzt wall_direction für den korrekten Überhang)
+        x_wall_front = np.array([0, wall_direction * wall_length * np.sin(angle_rad)])
+        z_wall = np.array([0, wall_length * np.cos(angle_rad)])
+        
+        # Wenn der Überhang nach rechts (+X) kippt, muss die Dicke nach links (-X) gehen.
+        x_wall_back = x_wall_front - (wall_direction * wall_thickness)
+        
+        # Wand zeichnen (von der Rückseite zur Vorderseite füllen)
+        ax.fill_betweenx(z_wall, x_wall_back, x_wall_front, color='#555555', label=f'Wand ({np.degrees(angle_rad):.0f}°)', zorder=1)
+        
+        # Trajektorie und Geschwindigkeit
+        v_abs = np.linalg.norm(velocities, axis=1)
+        points = np.array([plot_pos[:, 0], plot_pos[:, 2]]).T.reshape(-1, 1, 2)
+        segments = np.concatenate([points[:-1], points[1:]], axis=1)
+        v_abs_segments = (v_abs[:-1] + v_abs[1:]) / 2.0 
+
+        colormap = getattr(self.config, 'VIS_COLORMAP', 'turbo')
+        norm = plt.Normalize(v_abs_segments.min(), v_abs_segments.max())
+        lc = LineCollection(segments, cmap=colormap, norm=norm)
+        lc.set_array(v_abs_segments)
+        lc.set_linewidth(3.5)
+
+        line = ax.add_collection(lc)
+        cbar = fig.colorbar(line, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label('Absolute Geschwindigkeit [m/s]', rotation=270, labelpad=15)
+        
+        ax.scatter(plot_pos[0, 0], plot_pos[0, 2], color='green', s=120, zorder=5, label='Start', edgecolors='white')
+        ax.scatter(plot_pos[-1, 0], plot_pos[-1, 2], color='red', s=120, zorder=5, label='Ende', edgecolors='white')
+
+        ax.set_aspect('equal')
+        
+        # Symmetrische Limits, damit beide Varianten (gespiegelt oder nicht) gut aussehen
+        ax.set_xlim([-2.5, 2.5])
+        ax.set_ylim([-0.5, wall_length + 0.5])
+        
+        ax.set_xlabel('X-Achse (Tiefe / Wandabstand) [m]')
+        ax.set_ylabel('Z-Achse (Höhe) [m]')
+        ax.set_title('2D Speedwand-Analyse (Seitenansicht)')
+        
+        ax.legend(loc='upper right')
+        ax.grid(True, linestyle='--', alpha=0.3)
+        plt.tight_layout()

@@ -116,7 +116,24 @@ MAG_BIAS_RW = 1e-3             # Random Walk für Mag-Bias
 # VISUALISIERUNG
 # ==========================================
 ANIMATION_FPS = 30
-SHOW_RAW_SENSOR_DATA = True
-SHOW_VELOCITY = True   
+SHOW_RAW_SENSOR_DATA = False
+SHOW_VELOCITY = False   
 SHOW_ALTITUDE = False        
 SHOW_INIT_PLOT = False  
+SHOW_2D_FRONT = True              
+SHOW_2D_SIDE = True
+SHOW_3D_TRAJECTORY = True         
+SHOW_ANIMATED_TRAJECTORY = False              
+
+# Sensor-Offsets für die exakte Ausrichtung in den Plots
+VIS_SENSOR_START_Z = 1.1          # (m) Starthöhe des Sensors (Offset Z)
+VIS_SENSOR_OFFSET_Y = 0.3         # (m) Verschiebung auf der Breite (Offset Y)
+VIS_SENSOR_OFFSET_X = 0.5         # (m) Verschiebung zur Wand in der Seitenansicht (Offset X)
+VIS_MIRROR_Y = True               # Soll die Y-Achse gespiegelt werden? --> rechts entspricht dann +y
+VIS_MIRROR_X = True               # Soll die X-Achse gespiegelt werden? --> weck von der Wand entspricht dann +x
+
+# Wand-Eigenschaften für die Visualisierung
+VIS_WALL_LENGTH = 15.0            # (m) Länge der Kletterwand
+VIS_WALL_THICKNESS = 0.10         # (m) Dicke der gezeichneten Wand im Plot
+VIS_COLORMAP = "turbo"            # Farbschema für die Geschwindigkeits-Trajektorie
+VIS_WALL_BG_IMAGE = "./Images/speedwall_2D.png" # Dateipfad zum Hintergrundbild
