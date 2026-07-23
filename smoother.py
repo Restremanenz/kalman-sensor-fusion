@@ -31,9 +31,9 @@ class ESKFSmoother:
         self.states_history.append((p.copy(), v.copy(), q, ba.copy(), bg.copy(), bm.copy()))
         self.P_post_history.append(P_post.copy())
 
-    def overwrite_last_update(self, p, v, q, ba, bg, bm, P_post):
-        """Überschreibt den letzten Zustand. Genutzt für Boundary-Condition-Updates am Ende."""
-        self.states_history[-1] = (p.copy(), v.copy(), q, ba.copy(), bg.copy(), bm.copy())
+    def set_boundary_condition(self, p, v, q, ba, bg, bm, P_post):
+        """Speichert den durch die Boundary Conditions erzwungenen Zielzustand."""
+        self.boundary_state = (p.copy(), v.copy(), q, ba.copy(), bg.copy(), bm.copy())
         self.P_post_history[-1] = P_post.copy()
 
     def smooth(self):
@@ -42,24 +42,41 @@ class ESKFSmoother:
         N = len(self.states_history) - 1
 
         smoothed_states = [None] * (N + 1)
-        smoothed_states[N] = self.states_history[N]
-
-        # Der kumulierte Fehler am Ende ist 0, da wir alle Updates (inkl. Boundary) injiziert haben
         delta_x = np.zeros(self.dim_x)
+
+        # BUGFIX: Berechne den initialen Fehlervektor aus der Boundary-Bedingung!
+        if hasattr(self, 'boundary_state'):
+            p_fwd, v_fwd, q_fwd, ba_fwd, bg_fwd, bm_fwd = self.states_history[-1]
+            p_b, v_b, q_b, ba_b, bg_b, bm_b = self.boundary_state
+            
+            # Position & Velocity Error
+            delta_x[0:3] = p_b - p_fwd
+            delta_x[3:6] = v_b - v_fwd
+            
+            # Rotation Error (q_bound = delta_q * q_fwd)
+            error_rot = q_b * q_fwd.inv()
+            delta_x[6:9] = error_rot.as_rotvec()
+            
+            # Bias Errors
+            delta_x[9:12] = ba_b - ba_fwd
+            delta_x[12:15] = bg_b - bg_fwd
+            if self.use_18_state:
+                delta_x[15:18] = bm_b - bm_fwd
+                
+            smoothed_states[N] = self.boundary_state
+        else:
+            smoothed_states[N] = self.states_history[N]
 
         for k in range(N - 1, -1, -1):
             P_post = self.P_post_history[k]
             F = self.F_history[k]
-            P_prior = self.P_prior_history[k] # Dies ist mathematisch P_{k+1|k}
+            P_prior = self.P_prior_history[k] 
 
-            # Smoother Gain berechnen: C_k = P_{k|k} * F_k^T * P_{k+1|k}^-1
-            # np.linalg.pinv (Pseudo-Inverse) verhindert Abstürze bei extrem sicheren/kleinen Kovarianzen
             C_k = P_post @ F.T @ np.linalg.pinv(P_prior)
-
-            # Rückwärts-Propagation des Error-States
+            
+            # Jetzt wird der reale Fehler rückwärts verteilt!
             delta_x = C_k @ delta_x
-
-            # Injiziere den rückwärts berechneten Fehler in den Vorwärts-Zustand
+            
             smoothed_states[k] = self._inject(self.states_history[k], delta_x)
 
         return self._format_output(smoothed_states)

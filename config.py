@@ -8,7 +8,7 @@ IMU_CALIB_FILE = "sensor_params.json"
 # ABLAUF-STEUERUNG & INITIALISIERUNG
 # ==========================================
 USE_AUTO_INIT = True           # Start Ruhephase suchen   Hauptschalter
-STILLNESS_THRESHOLD = 2.0      # Drehgeschwindigkeit
+STILLNESS_THRESHOLD = 6.0      # Drehgeschwindigkeit
 MIN_STILL_SECONDS = 0.1        # Ruhesekunden
 
 MAX_PROCESS_TIME = None
@@ -17,7 +17,7 @@ MAX_PROCESS_TIME = None
 # ALIGNMENT & INITIALISIERUNG (START-PHASE)
 # ==========================================
 # Toggle: True = Retrograder Madgwick (Dynamisch), False = Static Leveling (Wasserwaage)
-USE_DYNAMIC_ALIGNMENT = True    
+USE_DYNAMIC_ALIGNMENT = False    
 
 # Parameter für das dynamische Alignment (wenn True)
 START_PEAK_THRESHOLD_G = 2    # (g) Ab dieser Beschleunigung gilt der Athlet als gestartet
@@ -28,7 +28,7 @@ WARMUP_BUFFER_SEC = 0.4         # (s) Sicherheitsabstand vom Start-Peak zurück 
 # END-DETECTION (Ziel-Erkennung)
 # ==============================================================
 USE_END_DETECTION = True             
-FREEFALL_THRESHOLD_G = 0.3           # Unter 0.6g werten wir als "Losgelassen / Freier Fall"
+FREEFALL_THRESHOLD_G = 0.6           # Unter 0.6g werten wir als "Losgelassen / Freier Fall"
 
 # ==========================================
 # POST-PROCESSING (RTS Smoother)
@@ -37,9 +37,9 @@ USE_SMOOTHER = True            # Smoother ein-/ausschalten
 
 # Positions-Ziele am Ende des Laufs
 SMOOTH_TO_BARO_Z = False        # Z-Achse an die exakt letzte Barometer-Höhe angleichen
-SMOOTH_XY_TO_ZERO = False       # X/Y-Achsen exakt über den Startpunkt zwingen
-TARGET_X_M = 0.0               # (m) Ziel X (0.0 = exakt über Start)
-TARGET_Y_M = 0.0               # (m) Ziel Y (0.0 = exakt über Start)
+SMOOTH_XY_TO_ZERO = True       # X/Y-Achsen exakt über den Startpunkt zwingen
+TARGET_X_M = -1.2               # (m) Ziel X (0.0 = exakt über Start)
+TARGET_Y_M = -1               # (m) Ziel Y (0.0 = exakt über Start)
 
 # Geschwindigkeits-Ziele
 # VORSICHT: Nur auf True setzen, wenn der Run komplett bis zum Stillstand/Buzzer läuft!
@@ -61,7 +61,7 @@ WALL_NORMAL_XY = [0.0, 1.0]
 
 WALL_UNCERTAINTY = 0.3              # (m) Toleranz/Gummiband-Effekt (z.B. 30 cm)
 
-WALL_DISABLE_ON_DESCENT = True      # Automatische Abschaltung beim Abseilen
+WALL_DISABLE_ON_DESCENT = False      # Automatische Abschaltung beim Abseilen
 DESCENT_DETECTION_THRESHOLD = 0.3   # (m) Ab welchem Höhenverlust gilt der Lauf als "beendet"?
 
 # ==========================================
@@ -113,5 +113,5 @@ MAG_BIAS_RW = 1e-3             # Random Walk für Mag-Bias
 ANIMATION_FPS = 30
 SHOW_RAW_SENSOR_DATA = True
 SHOW_VELOCITY = True   
-SHOW_ALTITUDE = True        
-SHOW_INIT_PLOT = True  
+SHOW_ALTITUDE = False        
+SHOW_INIT_PLOT = False  

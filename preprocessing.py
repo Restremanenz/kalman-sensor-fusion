@@ -126,91 +126,65 @@ class IMUPreprocessor:
         return df_init, init_end_idx
 
     def get_initial_alignment(self, df_imu, calib, fs_dynamisch):
+        """
+        Gold-Standard Alignment: Findet den Start, geht 1.5s zurück und 
+        berechnet eine robuste Wasserwaage (Median), die Muskelzucken ignoriert.
+        """
+        print("⚓ Nutze robustes Median-Alignment (Gold Standard)...")
         fs = fs_dynamisch
         
-        if getattr(self.config, 'USE_DYNAMIC_ALIGNMENT', False):
-            print("🚀 Nutze Retrograde Dynamic Alignment (Madgwick)...")
+        # 1. Finde den explosiven Start-Peak
+        acc_mag = np.sqrt(df_imu['A_x [g]']**2 + df_imu['A_y [g]']**2 + df_imu['A_z [g]']**2).values
+        threshold = getattr(self.config, 'START_PEAK_THRESHOLD_G', 1.2)
+        peaks = np.where(acc_mag > threshold)[0]
+        
+        if len(peaks) == 0:
+            print("FEHLER: Kein Start-Peak gefunden. Breche ab.")
+            sys.exit(1)
             
-            # ====================================================================
-            # 🔥 FIX 1: Gyro-Bias retten!
-            # Wir suchen erst die ECHTE Ruhephase, ABER NUR um das Gyro zu nullen!
-            # ====================================================================
-            df_still, _ = self.find_initial_stillness(df_imu, fs)
-            raw_gyros_still = df_still[['G_x [dps]', 'G_y [dps]', 'G_z [dps]']].values
-            calib.gyro_bias = np.mean(raw_gyros_still, axis=0)
-            print(f" -> Gyro-Bias erfolgreich aus echter Ruhephase berechnet.")
-
-            # 1. Start-Explosion finden 
-            # 🔥 FIX 2: Schwellenwert senken, damit wir nicht schon mitten im Klettern sind!
-            acc_mag = np.sqrt(df_imu['A_x [g]']**2 + df_imu['A_y [g]']**2 + df_imu['A_z [g]']**2).values
-            threshold = getattr(self.config, 'START_PEAK_THRESHOLD_G', 1.2) # <--- Von 1.5 auf 1.2 gesenkt!
-            peaks = np.where(acc_mag > threshold)[0]
+        start_idx = peaks[0]
+        
+        # 2. Definiere das Fenster: 1.5s Dauer, 0.2s Puffer vor dem Peak
+        buffer_samples = int(0.2 * fs)
+        window_samples = int(1.5 * fs)
+        
+        end_idx = max(0, start_idx - buffer_samples)
+        start_window_idx = max(0, end_idx - window_samples)
+        
+        if start_window_idx == end_idx:
+            start_window_idx = 0  # Fallback, falls Lauf zu früh beginnt
             
-            if len(peaks) == 0:
-                print(" -> WARNUNG: Kein Start-Peak gefunden! Falle auf Static Leveling zurück.")
-                df_init, init_idx = self.find_initial_stillness(df_imu, fs)
-                q_init, P0, _ = self._static_leveling_alignment(df_init, calib)
-                return q_init, P0, init_idx
-            
-            start_idx = peaks[0] 
-            
-            # 🔥 FIX 3: Den Sicherheitsabstand (Buffer) erhöhen!
-            # Wir gehen 1.0 Sekunden vor dem Peak zurück (statt 0.3s), 
-            # damit wir GANZ SICHER vor der Muskelanspannung des Kletterers landen.
-            buffer_samples = int(getattr(self.config, 'WARMUP_BUFFER_SEC', 1.0) * fs)
-            warmup_samples = int(getattr(self.config, 'WARMUP_WINDOW_SEC', 3.0) * fs)
-            
-            warmup_end_idx = start_idx - buffer_samples
-            warmup_start_idx = warmup_end_idx - warmup_samples
-            
-            # ... AB HIER GEHT ES EXAKT SO WEITER WIE IN DEINEM AKTUELLEN CODE ...
-            # df_warmup = df_imu.iloc[warmup_start_idx:warmup_end_idx]
-            # ...
-            
-            # 3. Warm-Up Daten extrahieren
-            df_warmup = df_imu.iloc[warmup_start_idx:warmup_end_idx]
-            
-            # Wasserwaage für das erste Frame des Warmups
-            q_base, P0, _ = self._static_leveling_alignment(df_warmup.head(int(0.5 * fs)), calib)
-            q_base_scipy = q_base.as_quat()
-            q_base_ahrs = np.array([q_base_scipy[3], q_base_scipy[0], q_base_scipy[1], q_base_scipy[2]])
-            
-            gyro_data = df_warmup[['G_x [dps]', 'G_y [dps]', 'G_z [dps]']].values
-            acc_data = df_warmup[['A_x [g]', 'A_y [g]', 'A_z [g]']].values
-            
-            gyro_rad = np.deg2rad(gyro_data - calib.gyro_bias)
-            acc_calib = np.array([calib.calibrate_acc(a) for a in acc_data])
-            
-            # 4. Madgwick vorschalten
-            madgwick = ahrs.filters.Madgwick(gain=0.05, frequency=fs)
-            Q = np.zeros((len(gyro_rad), 4))
-            Q[0] = q_base_ahrs 
-            
-            for i in range(1, len(gyro_rad)):
-                Q[i] = madgwick.updateIMU(Q[i-1], gyr=gyro_rad[i], acc=acc_calib[i])
-                
-            final_q_madgwick = Q[-1] 
-            q_init = R.from_quat([final_q_madgwick[1], final_q_madgwick[2], final_q_madgwick[3], final_q_madgwick[0]])
-            
-            print(f" -> Dynamisches Alignment beendet. ESKF übernimmt bei {start_idx/fs:.2f}s")
-            return q_init, P0, start_idx
-            
+        df_window = df_imu.iloc[start_window_idx:end_idx]
+        
+        # 3. Gyroskop Bias via Median (Ignoriert Atem-Spikes und Muskelzucken)
+        raw_gyros = df_window[['G_x [dps]', 'G_y [dps]', 'G_z [dps]']].values
+        calib.gyro_bias = np.median(raw_gyros, axis=0)
+        
+        # 4. Wasserwaage via Median der Beschleunigung 
+        raw_accs = df_window[['A_x [g]', 'A_y [g]', 'A_z [g]']].values
+        accs_calib = np.array([calib.calibrate_acc(a) for a in raw_accs])
+        median_acc = np.median(accs_calib, axis=0)
+        
+        # Orientierung berechnen
+        v_acc_body = median_acc / np.linalg.norm(median_acc)
+        v2 = np.array([0.0, 0.0, 1.0])
+        axis = np.cross(v_acc_body, v2)
+        axis_norm = np.linalg.norm(axis)
+        
+        if axis_norm > 1e-6:
+            axis = axis / axis_norm
+            angle = np.arccos(np.clip(np.dot(v_acc_body, v2), -1.0, 1.0))
+            q_init = R.from_rotvec(axis * angle)
         else:
-            print("⚓ Nutze Static Leveling Alignment (Wasserwaage)...")
-            # ====================================================================
-            # 🔥 HIER IST DIE KORREKTUR:
-            # Wir rufen deine originale Suchfunktion auf. Das repariert folgendes:
-            # 1. Der Init-Plot wird wieder gezeichnet.
-            # 2. Es wird eine *echte* Ruhephase gesucht (maximale Genauigkeit).
-            # ====================================================================
-            df_init, init_idx = self.find_initial_stillness(df_imu, fs)
+            q_init = R.from_quat([0,0,0,1])
             
-            # Jetzt berechnen wir das static leveling mit den echten, sauberen Ruhedaten
-            q_init, P0, _ = self._static_leveling_alignment(df_init, calib)
-            
-            # Wir geben den originalen init_idx zurück, damit der Kalman-Filter 
-            # exakt nach der gefundenen Ruhephase startet (wie in deinem alten Code!)
-            return q_init, P0, init_idx
+        P0 = df_window['P [hPa]'].mean()
+        
+        print(f" -> Start detektiert bei {start_idx/fs:.2f}s.")
+        print(f" -> Median-Fenster genutzt von {start_window_idx/fs:.2f}s bis {end_idx/fs:.2f}s")
+        
+        return q_init, P0, start_idx
+    
     def _static_leveling_alignment(self, df_init, calib):
         """Deine vorherige, perfekte Wasserwaagen-Methode als Helper-Funktion ausgelagert."""
         # 1. Gyro Bias berechnen (Darf hier live berechnet werden, weil Sensor echt ruht!)
