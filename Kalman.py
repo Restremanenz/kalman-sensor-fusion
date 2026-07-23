@@ -256,7 +256,7 @@ def main():
         gravity_body = q_init.inv().apply([0.0, 0.0, 1.0]) # Berechnung des Vektors
 
         print("\n" + "="*55)
-        print("🎯 INITIAL ALIGNMENT VERGLEICH")
+        print("INITIAL ALIGNMENT VERGLEICH")
         print("="*55)
         print(f"Methode:      {getattr(config, 'ALIGNMENT_METHOD', 'STATIC')}")
         print(f"Start-Indizes: Process: {process_start_idx} | True Start: {true_start_idx}")
@@ -280,6 +280,14 @@ def main():
         df_imu, q_init, process_start_idx, true_start_idx, calib, fs_dynamisch
     )
 
+    # LAUFZEIT BERECHNEN UND AUSGEBEN 
+    if len(times) > 1:
+        run_duration = times[-1] - times[0]
+        print("\n" + "="*55)
+        print(f"BERECHNETE LAUFZEIT: {run_duration:.3f} Sekunden")
+        print("="*55)
+    else:
+        print("\n[WARNUNG] Laufzeit konnte nicht berechnet werden (zu wenig Daten).")
 
     # ==============================================================
     # 5. VISUALISIERUNG
