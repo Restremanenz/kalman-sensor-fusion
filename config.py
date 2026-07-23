@@ -5,24 +5,25 @@ LOG_FOLDER = "./Data/7sek"
 IMU_CALIB_FILE = "sensor_params.json"
 
 # ==========================================
-# ABLAUF-STEUERUNG & INITIALISIERUNG
+# ABLAUF-STEUERUNG & DEBUGGING
 # ==========================================
-USE_AUTO_INIT = True           # Start Ruhephase suchen   Hauptschalter
-STILLNESS_THRESHOLD = 6.0      # Drehgeschwindigkeit
-MIN_STILL_SECONDS = 0.1        # Ruhesekunden
-
-MAX_PROCESS_TIME = None
+USE_AUTO_INIT = True           # Master-Schalter: True = Start-Ausrichtung berechnen, False = Ignorieren
+MAX_PROCESS_TIME = None        # (s) Zum Debuggen: Bricht den Datensatz nach X Sekunden ab
 
 # ==========================================
 # ALIGNMENT & INITIALISIERUNG (START-PHASE)
 # ==========================================
-# Toggle: True = Retrograder Madgwick (Dynamisch), False = Static Leveling (Wasserwaage)
-USE_DYNAMIC_ALIGNMENT = True    
+# Wähle die Methode: 'STATIC', 'MADGWICK' oder 'ESKF'
+ALIGNMENT_METHOD = 'ESKF'    
 
-# Parameter für das dynamische Alignment (wenn True)
-START_PEAK_THRESHOLD_G = 2    # (g) Ab dieser Beschleunigung gilt der Athlet als gestartet
-WARMUP_WINDOW_SEC = 4.0         # (s) Dauer der Madgwick-Einschwingphase vor dem Start
-WARMUP_BUFFER_SEC = 0.4         # (s) Sicherheitsabstand vom Start-Peak zurück (Vermeidet Fliehkräfte am Ende)
+# Basis-Parameter (Werden von allen Methoden genutzt, um den Gyro-Bias am Start zu finden)
+STILLNESS_THRESHOLD = 4      # (dps) Unterhalb dieser Drehrate gilt der Sensor als ruhend
+MIN_STILL_SECONDS = 0.6        # (s) So lange muss der Sensor für den initialen Gyro-Bias ruhen
+
+# Spezifische Parameter für dynamische Starts (MADGWICK und ESKF)
+START_PEAK_THRESHOLD_G = 2   # (g) Ab dieser Beschleunigung gilt der Athlet als gestartet
+WARMUP_WINDOW_SEC = 4.0        # (s) Dauer der Einschwingphase VOR dem Start
+WARMUP_BUFFER_SEC = 0.2        # (s) Sicherheitsabstand vom Start-Peak zurück
 
 # ==============================================================
 # END-DETECTION (Ziel-Erkennung)

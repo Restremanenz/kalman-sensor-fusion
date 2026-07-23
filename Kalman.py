@@ -42,7 +42,7 @@ class IMUCalibration:
         return self.mag_M @ (raw_mag - self.mag_bias)
 
 
-def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch):
+def run_eskf_pipeline(df_imu, q_init, process_start_idx, true_start_idx, calib, fs_dynamisch):
     mag_in_run_active = config.USE_MAGNETOMETER and config.USE_18_STATE_ESKF
     print(f"Starte {'18-State' if mag_in_run_active else '15-State'} Error-State Kalman Filter...")
     
@@ -62,105 +62,50 @@ def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch):
         mag_unc = config.MAG_UNCERTAINTY
     )
     
-    # 1. INITIALISIERE DEN NEUEN SMOOTHER
     smoother = ESKFSmoother(use_18_state=mag_in_run_active)
-    smoother.save_initial_state(
-        eskf.p, eskf.v, eskf.q, eskf.ba, eskf.bg, 
-        eskf.bm if mag_in_run_active else np.zeros(3), eskf.kf.P
-    )
-
+    smoother_started = False
+    
     times_plot = []
     times = df_imu["Time"].values
     last_baro_time = -1.0 
     last_mag_time = -1.0
     
-    is_climbing = True
     peak_altitude = 0.0
     final_baro_z = 0.0
 
-    # =================================================================
-    # 🏁 PRE-COMPUTE END INDEX (Sensor-Fusion: Baro + Accel)
-    # =================================================================
     end_idx = len(df_imu)
-    
     if getattr(config, 'USE_END_DETECTION', False):
-        print("🔍 Suche nach Ziel-Buzzer (Baro + Accel Fusion)...")
-        # 1. Grobe Suche: Höchster Punkt laut gefiltertem Barometer (nach dem Start)
         altitudes = df_imu['Altitude_filt [m]'].values
-        baro_peak_idx = init_idx + np.argmax(altitudes[init_idx:])
-        
-        # 2. Feine Suche: Finde den Moment des Loslassens (Freier Fall) 
-        # Wir suchen in einem Zeitfenster von 2 Sekunden nach dem Baro-Peak
-        search_start = baro_peak_idx - int(0.5 * fs_dynamisch) # 0.5s Toleranz vor dem Peak
+        # Suche nach Ziel erst AB dem echten Start
+        baro_peak_idx = true_start_idx + np.argmax(altitudes[true_start_idx:])
+        search_start = baro_peak_idx - int(0.5 * fs_dynamisch) 
         search_end = min(len(df_imu), baro_peak_idx + int(2.5 * fs_dynamisch)) 
         
         acc_mag = np.sqrt(df_imu['A_x [g]']**2 + df_imu['A_y [g]']**2 + df_imu['A_z [g]']**2).values
-        
-        # Suchen, wann die Beschleunigung unter den Schwellenwert (z.B. 0.6g) fällt
         freefall_indices = np.where(acc_mag[search_start:search_end] < getattr(config, 'FREEFALL_THRESHOLD_G', 0.6))[0]
         
         if len(freefall_indices) > 0:
-            # Der exakte Index kurz bevor der freie Fall beginnt
             end_idx = search_start + freefall_indices[0]
-            print(f" -> 🎯 Ziel exakt erkannt! Baro-Peak bei {times[baro_peak_idx]:.2f}s | Freier Fall ins Seil beginnt bei {times[end_idx]:.2f}s")
-            final_baro_z = altitudes[baro_peak_idx] # Für das Smoother-Boundary Update
+            final_baro_z = altitudes[baro_peak_idx] 
         else:
-            # Fallback, falls der Kletterer langsam abklettert (kein freier Fall)
             end_idx = baro_peak_idx
-            print(f" -> 🎯 Ziel via Baro-Peak bei {times[end_idx]:.2f}s erkannt (Kein freier Fall detektiert).")
             final_baro_z = altitudes[baro_peak_idx]
-    # =================================================================
-    # ⏱️ LAUFZEIT BERECHNEN (Speedklettern)
-    # =================================================================
-    if getattr(config, 'USE_END_DETECTION', False):
-        start_time = times[init_idx]
-        # Falls end_idx das Ende des Arrays erreicht hat, nehmen wir den letzten gültigen Index (-1)
-        valid_end_idx = end_idx if end_idx < len(times) else len(times) - 1
-        end_time = times[valid_end_idx]
-        
-        run_time = end_time - start_time
-        
-        print("\n" + "="*55)
-        print("⏱️ SPEEDKLETTERN - LAUFZEIT-ANALYSE")
-        print("="*55)
-        print(f" -> Start-Zeitpunkt: {start_time:.3f} s (Index {init_idx})")
-        print(f" -> Ziel-Zeitpunkt:  {end_time:.3f} s (Index {valid_end_idx})")
-        print(f" -> NETTO-LAUFZEIT:  {run_time:.3f} Sekunden")
-        print("="*55 + "\n")        
 
+    # Wir beginnen die Schleife bei 1 für die dt-Berechnung
     for i in range(1, end_idx):
         dt = times[i] - times[i-1]
         if dt <= 0: continue
             
         row = df_imu.iloc[i]
+        current_baro_time = row['Baro_Time']
+        current_mag_time = row['Mag_Time'] if mag_in_run_active else None
         
-        # =================================================================
-        # 🛡️ PRE-FLIGHT MASKING: Vor dem Startpunkt wird NICHT integriert!
-        # =================================================================
-        if i < init_idx:
-            # Damit Baro/Mag-Timer synchron bleiben, wenn der Start ertönt:
-            current_baro_time = row['Baro_Time']
+        # Ignoriere alles VOR dem definierten Verarbeitungspunkt (spart Rechenzeit)
+        if i < process_start_idx:
             if pd.notna(current_baro_time): last_baro_time = current_baro_time
-            if mag_in_run_active:
-                current_mag_time = row['Mag_Time']
-                if pd.notna(current_mag_time): last_mag_time = current_mag_time
+            if pd.notna(current_mag_time): last_mag_time = current_mag_time
+            continue 
 
-            # Wir füttern den Smoother künstlich mit Nullen (v=0, p=0, Orientierung=q_init)
-            smoother.save_predict(eskf.kf.F, eskf.kf.P) 
-            smoother.save_update(
-                np.zeros(3),        # Position bleibt hart auf [0,0,0]
-                np.zeros(3),        # Geschwindigkeit bleibt hart auf [0,0,0]
-                q_init,             # Orientierung ist exakt die Start-Ausrichtung
-                eskf.ba, eskf.bg, eskf.bm if mag_in_run_active else np.zeros(3), 
-                eskf.kf.P
-            )
-            times_plot.append(times[i])
-            continue  # <-- Springt zur nächsten Zeile, der ESKF wird komplett ignoriert!
-        
-        # =================================================================
-        # AB HIER: NORMALE ESKF KOPPELNAVIGATION (i >= init_idx)
-        # =================================================================
-        
         raw_acc = np.array([row['A_x [g]'], row['A_y [g]'], row['A_z [g]']]) 
         raw_gyro = np.array([row['G_x [dps]'], row['G_y [dps]'], row['G_z [dps]']]) 
         raw_mag = np.array([row['M_x [G]'], row['M_y [G]'], row['M_z [G]']])
@@ -169,46 +114,67 @@ def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch):
         gyro_calib = calib.calibrate_gyro(raw_gyro)
         mag_calib = calib.calibrate_mag(raw_mag)
 
-        # 2. PREDICT UND SPEICHERN
+        # =================================================================
+        # 🛠️ WARM-UP PHASE (Nur bei Methode 'ESKF' aktiv)
+        # =================================================================
+        if i < true_start_idx:
+            eskf.predict(acc_calib, gyro_calib, dt)
+            
+            # Zwinge den Filter an Ort und Stelle: Er MUSS Orientierung & Biases optimieren!
+            eskf.update_zupt()             
+            eskf.update_zaru(gyro_calib)   
+            eskf.update_gravity(acc_calib)
+            
+            if pd.notna(current_baro_time): last_baro_time = current_baro_time
+            if pd.notna(current_mag_time): last_mag_time = current_mag_time
+            continue # Smoother wird hier noch NICHT gefüttert!
+
+        # =================================================================
+        # 🚀 "CLEAN SLATE" RESET (Exakt am Moment des Start-Peaks)
+        # =================================================================
+        elif i == true_start_idx:
+            # Orientierung (q) und Biases (ba, bg) behalten wir aus dem Warm-Up!
+            # Position und Geschwindigkeit hart auf [0,0,0] setzen:
+            eskf.p = np.zeros(3)
+            eskf.v = np.zeros(3)
+            
+            # Mache die Kovarianz für Position & Geschwindigkeit sehr "sicher", 
+            # da wir den Ursprung des Koordinatensystems exakt hier definieren.
+            eskf.kf.P[0:6, 0:6] = 1e-6 
+
+            smoother.save_initial_state(
+                eskf.p, eskf.v, eskf.q, eskf.ba, eskf.bg, 
+                eskf.bm if mag_in_run_active else np.zeros(3), eskf.kf.P
+            )
+            smoother_started = True
+
+        # =================================================================
+        # 🏃‍♂️ AB HIER: NORMALE ESKF KOPPELNAVIGATION (i >= true_start_idx)
+        # =================================================================
         eskf.predict(acc_calib, gyro_calib, dt)
-        smoother.save_predict(eskf.kf.F, eskf.kf.P) # Speichert P_prior
+        if smoother_started:
+            smoother.save_predict(eskf.kf.F, eskf.kf.P) 
         
-        # --------------------------------------------------
-        # Peak-Erkennung und harter Schleifen-Abbruch
-        # --------------------------------------------------
         current_alt = row['Altitude_filt [m]']
         if current_alt > peak_altitude:
-            peak_altitude = current_alt  # Höchsten Punkt merken
+            peak_altitude = current_alt  
             
-        # Wenn wir z.B. 50cm vom Höchstpunkt abfallen -> Kletterer hängt im Seil!
         if (peak_altitude - current_alt) > getattr(config, 'DESCENT_DETECTION_THRESHOLD', 0.5):
-            print(f" -> Info: Abseilen erkannt bei {current_alt:.1f}m (Peak war {peak_altitude:.1f}m). Beende Koppelnavigation!")
-            final_baro_z = current_alt  # Höhe festhalten
-            break  # <--- Bricht die For-Schleife SOFORT ab!
+            print(f" -> Info: Abseilen erkannt bei {current_alt:.1f}m. Beende Koppelnavigation!")
+            final_baro_z = current_alt 
+            break  
             
-        final_baro_z = current_alt  # Wird aktualisiert, falls wir regulär ans Dateiende kommen
+        final_baro_z = current_alt
 
-        # --------------------------------------------------
-        # Barometer & Wand Update
-        # --------------------------------------------------
-        current_baro_time = row['Baro_Time']
         if pd.notna(current_baro_time) and current_baro_time != last_baro_time:
             eskf.update_barometer(row['Altitude_filt [m]'])
-            
             if getattr(config, 'USE_WALL_CONSTRAINT', False):
-                eskf.update_wall_constraint(
-                    normal_xy=config.WALL_NORMAL_XY, 
-                    inclination_deg=config.WALL_INCLINATION_DEG, 
-                    uncertainty=config.WALL_UNCERTAINTY
-                )
+                eskf.update_wall_constraint(normal_xy=config.WALL_NORMAL_XY, inclination_deg=config.WALL_INCLINATION_DEG, uncertainty=config.WALL_UNCERTAINTY)
             last_baro_time = current_baro_time
 
-        mag_magnitude = np.linalg.norm(mag_calib)
-        if mag_in_run_active:
-            current_mag_time = row['Mag_Time']
-            if pd.notna(current_mag_time) and current_mag_time != last_mag_time and abs(mag_magnitude - 1.0) < 0.1:
-                eskf.update_mag(mag_calib)
-                last_mag_time = current_mag_time
+        if mag_in_run_active and pd.notna(current_mag_time) and current_mag_time != last_mag_time:
+            eskf.update_mag(mag_calib)
+            last_mag_time = current_mag_time
 
         if getattr(config, 'USE_ZUPT', False):
             acc_world = eskf.q.apply(acc_calib)
@@ -221,12 +187,12 @@ def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch):
                 eskf.update_zaru(gyro_calib)   
                 eskf.update_gravity(acc_calib) 
 
-        # 3. UPDATE SPEICHERN
-        smoother.save_update(
-            eskf.p, eskf.v, eskf.q, eskf.ba, eskf.bg, 
-            eskf.bm if mag_in_run_active else np.zeros(3), eskf.kf.P
-        )
-        times_plot.append(times[i])
+        if smoother_started:
+            smoother.save_update(
+                eskf.p, eskf.v, eskf.q, eskf.ba, eskf.bg, 
+                eskf.bm if mag_in_run_active else np.zeros(3), eskf.kf.P
+            )
+            times_plot.append(times[i])
 
     # ==========================================================
     # 4. BOUNDARY CONDITIONS ALS KALMAN-UPDATES & RTS SMOOTHING
@@ -277,11 +243,11 @@ def main():
     
     df_imu, fs_dynamisch = preprocessor.load_and_merge_data(reader)
 
-    # ==============================================================
+# ==============================================================
     # 2. PRE-PROCESSING (Initialisierung & Barometer)
     # ==============================================================
     if getattr(config, 'USE_AUTO_INIT', True):
-        q_init, P0, init_idx = preprocessor.get_initial_alignment(df_imu, calib, fs_dynamisch)
+        q_init, P0, process_start_idx, true_start_idx = preprocessor.get_initial_alignment(df_imu, calib, fs_dynamisch)
 
         # ==============================================================
         # AUSGABE FÜR DEN VERGLEICH 
@@ -292,25 +258,26 @@ def main():
         print("\n" + "="*55)
         print("🎯 INITIAL ALIGNMENT VERGLEICH")
         print("="*55)
-        print(f"Methode:      {'Dynamisch (Madgwick)' if getattr(config, 'USE_DYNAMIC_ALIGNMENT', False) else 'Statisch (Wasserwaage)'}")
-        print(f"Start-Index:  {init_idx}")
+        print(f"Methode:      {getattr(config, 'ALIGNMENT_METHOD', 'STATIC')}")
+        print(f"Start-Indizes: Process: {process_start_idx} | True Start: {true_start_idx}")
         print(f"Winkel:       Roll: {euler_deg[0]:.2f}° | Pitch: {euler_deg[1]:.2f}° | Yaw: {euler_deg[2]:.2f}°")
         print(f"Schwerkraft:  [X: {gravity_body[0]:.4f}g | Y: {gravity_body[1]:.4f}g | Z: {gravity_body[2]:.4f}g]")
         print("="*55 + "\n")
     else:
         print("WARNUNG: Auto-Init deaktiviert. Starte unkalibriert.")
-        init_idx = 1
+        process_start_idx = 1
+        true_start_idx = 1
         P0 = df_imu['P [hPa]'].iloc[0]
         q_init = R.from_quat([0, 0, 0, 1])
 
     # Höhenberechnung, Zero-Phase Filter, Tare & Data-Cropping
-    df_imu = preprocessor.process_barometer_and_crop(df_imu, P0, init_idx, fs_dynamisch)
+    df_imu = preprocessor.process_barometer_and_crop(df_imu, P0, true_start_idx, fs_dynamisch)
 
     # ==============================================================
     # 3. KOPPELNAVIGATION (15-State ESKF)
     # ==============================================================
     positions, velocities, orientations, times, eskf = run_eskf_pipeline(
-        df_imu, q_init, init_idx, calib, fs_dynamisch
+        df_imu, q_init, process_start_idx, true_start_idx, calib, fs_dynamisch
     )
 
 
