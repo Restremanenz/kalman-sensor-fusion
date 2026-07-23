@@ -34,13 +34,13 @@ FREEFALL_THRESHOLD_G = 0.6           # Unter 0.6g werten wir als "Losgelassen / 
 # ==========================================
 # POST-PROCESSING (RTS Smoother)
 # ==========================================
-USE_SMOOTHER = False            # Smoother ein-/ausschalten
+USE_SMOOTHER = True            # Smoother ein-/ausschalten
 
 # Positions-Ziele am Ende des Laufs
 SMOOTH_TO_BARO_Z = False        # Z-Achse an die exakt letzte Barometer-Höhe angleichen
-SMOOTH_XY_TO_ZERO = False       # X/Y-Achsen exakt über den Startpunkt zwingen
+SMOOTH_XY_TO_ZERO = True       # X/Y-Achsen exakt über den Startpunkt zwingen
 TARGET_X_M = -1.2               # (m) Ziel X (0.0 = exakt über Start)
-TARGET_Y_M = -1               # (m) Ziel Y (0.0 = exakt über Start)
+TARGET_Y_M = -0.2               # (m) Ziel Y (0.0 = exakt über Start)
 
 # Geschwindigkeits-Ziele
 # VORSICHT: Nur auf True setzen, wenn der Run komplett bis zum Stillstand/Buzzer läuft!

@@ -32,8 +32,11 @@ class ESKFSmoother:
         self.P_post_history.append(P_post.copy())
 
     def overwrite_last_update(self, p, v, q, ba, bg, bm, P_post):
-        """Überschreibt den letzten Zustand. Genutzt für Boundary-Condition-Updates am Ende."""
-        self.states_history[-1] = (p.copy(), v.copy(), q, ba.copy(), bg.copy(), bm.copy())
+        """Überschreibt den letzten Zustand und merkt sich den verursachten Fehler."""
+        new_state = (p.copy(), v.copy(), q, ba.copy(), bg.copy(), bm.copy())
+        self.boundary_delta_x = self._calculate_error_state(self.states_history[-1], new_state)
+
+        self.states_history[-1] = new_state
         self.P_post_history[-1] = P_post.copy()
 
     def smooth(self):
@@ -44,8 +47,10 @@ class ESKFSmoother:
         smoothed_states = [None] * (N + 1)
         smoothed_states[N] = self.states_history[N]
 
-        # Der kumulierte Fehler am Ende ist 0, da wir alle Updates (inkl. Boundary) injiziert haben
-        delta_x = np.zeros(self.dim_x)
+        if hasattr(self, 'boundary_delta_x'):
+            delta_x = self.boundary_delta_x.copy()
+        else:
+            delta_x = np.zeros(self.dim_x)
 
         for k in range(N - 1, -1, -1):
             P_post = self.P_post_history[k]
@@ -53,7 +58,6 @@ class ESKFSmoother:
             P_prior = self.P_prior_history[k] # Dies ist mathematisch P_{k+1|k}
 
             # Smoother Gain berechnen: C_k = P_{k|k} * F_k^T * P_{k+1|k}^-1
-            # np.linalg.pinv (Pseudo-Inverse) verhindert Abstürze bei extrem sicheren/kleinen Kovarianzen
             C_k = P_post @ F.T @ np.linalg.pinv(P_prior)
 
             # Rückwärts-Propagation des Error-States
@@ -94,3 +98,28 @@ class ESKFSmoother:
         velocities = np.array([s[1] for s in states[1:]])
         orientations = [s[2] for s in states[1:]]
         return positions, velocities, orientations
+    
+    def _calculate_error_state(self, state_old, state_new):
+        """Berechnet den Error-State Vektor (delta_x) zwischen altem und neuem Zustand."""
+        p_old, v_old, q_old, ba_old, bg_old, bm_old = state_old
+        p_new, v_new, q_new, ba_new, bg_new, bm_new = state_new
+
+        delta_x = np.zeros(self.dim_x)
+        
+        # Position und Geschwindigkeit
+        delta_x[0:3] = p_new - p_old
+        delta_x[3:6] = v_new - v_old
+
+        # Orientierung (Quaternion Differenz umgewandelt in Rotationsvektor)
+        # q_new = q_err * q_old -> q_err = q_new * q_old.inv()
+        error_rot = q_new * q_old.inv()
+        delta_x[6:9] = error_rot.as_rotvec()
+
+        # Biases
+        delta_x[9:12] = ba_new - ba_old
+        delta_x[12:15] = bg_new - bg_old
+
+        if self.use_18_state:
+            delta_x[15:18] = bm_new - bm_old
+
+        return delta_x
