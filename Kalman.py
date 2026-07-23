@@ -42,10 +42,10 @@ class IMUCalibration:
         return self.mag_M @ (raw_mag - self.mag_bias)
 
 
-def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch, verbose=True):
+def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch):
     mag_in_run_active = config.USE_MAGNETOMETER and config.USE_18_STATE_ESKF
-    if verbose:
-        print(f"Starte {'18-State' if mag_in_run_active else '15-State'} Error-State Kalman Filter...")
+    print(f"Starte {'18-State' if mag_in_run_active else '15-State'} Error-State Kalman Filter...")
+    
     eskf = FilterpyESKF(
         initial_pos = [0.0, 0.0, 0.0], 
         initial_q = q_init, 
@@ -61,13 +61,6 @@ def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch, verbose=Tru
         mag_rw = config.MAG_BIAS_RW,
         mag_unc = config.MAG_UNCERTAINTY
     )
-
-    # ====================================================================
-    # HARTES ZUPT-UPDATE direkt am Start! 
-    # Der Smoother braucht diesen Anker ($v=0$) bei $t=0$, 
-    # um den restlichen Tilt-Error am Ende mathematisch zurückzurechnen
-    # ====================================================================
-    eskf.update_zupt()
     
     # 1. INITIALISIERE DEN NEUEN SMOOTHER
     smoother = ESKFSmoother(use_18_state=mag_in_run_active)
@@ -260,7 +253,7 @@ def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch, verbose=Tru
 
         # Falls Bedingungen angewendet wurden, überschreiben wir den allerletzten Zustand im Smoother
         if applied_boundary:
-            smoother.set_boundary_condition(
+            smoother.overwrite_last_update(
                 eskf.p, eskf.v, eskf.q, eskf.ba, eskf.bg, 
                 eskf.bm if mag_in_run_active else np.zeros(3), eskf.kf.P
             )
@@ -273,57 +266,6 @@ def run_eskf_pipeline(df_imu, q_init, init_idx, calib, fs_dynamisch, verbose=Tru
 
     return positions, velocities, orientations, np.array(times_plot), eskf
 
-def find_best_yaw_and_smooth(df_imu, q_init, init_idx, calib, fs_dynamisch):
-    """Grid-Search: Findet den wahren Yaw-Winkel über die geringste seitliche Varianz."""
-    target_radius = 15.0 * np.tan(np.radians(getattr(config, 'WALL_INCLINATION_DEG', 5.0)))
-    
-    best_yaw = 0
-    min_lateral_variance = float('inf')
-    best_res = None
-    
-    # Raten in 2-Grad-Schritten (Kompensiert +/- 90 Grad Sensorverdrehung am Gurt)
-    test_angles = np.arange(-180, 181, 5)
-    
-    print("\n" + "="*55)
-    print(f"🚀 STARTE YAW-GRID-SEARCH ({len(test_angles)} Durchläufe)...")
-    print("="*55)
-    
-    for angle_deg in test_angles:
-        angle_rad = np.radians(angle_deg)
-        
-        # Zielpunkt auf dem 1.31m Radius rotieren
-        config.TARGET_X_M = target_radius * np.sin(angle_rad)
-        config.TARGET_Y_M = target_radius * np.cos(angle_rad)
-        
-        # Filter mit `verbose=False` ausführen, um die Konsole nicht zu fluten
-        positions, velocities, orientations, times, eskf = run_eskf_pipeline(
-            df_imu, q_init, init_idx, calib, fs_dynamisch, verbose=False
-        )
-        
-        # Kostenfunktion: Berechnung der lateralen Varianz (Seitliches Wackeln)
-        target_vec = np.array([config.TARGET_X_M, config.TARGET_Y_M])
-        target_norm = np.linalg.norm(target_vec)
-        
-        if target_norm < 1e-6:
-            target_dir = np.array([0.0, 1.0])
-        else:
-            target_dir = target_vec / target_norm
-            
-        # Orthogonaler Vektor zur Bewegungsrichtung
-        lateral_dir = np.array([-target_dir[1], target_dir[0]])
-        
-        # Projektion aller Punkte auf die seitliche Achse
-        xy_positions = positions[:, 0:2]
-        lateral_deviations = xy_positions @ lateral_dir
-        lateral_variance = np.var(lateral_deviations)
-        
-        if lateral_variance < min_lateral_variance:
-            min_lateral_variance = lateral_variance
-            best_yaw = angle_deg
-            best_res = (positions, velocities, orientations, times, eskf)
-            
-    print(f"🎯 Bester Yaw-Winkel gefunden: {best_yaw}° (Seitliche Varianz: {min_lateral_variance:.4f} m²)\n")
-    return best_res
 
 def main():
     # ==============================================================
@@ -367,7 +309,7 @@ def main():
     # ==============================================================
     # 3. KOPPELNAVIGATION (15-State ESKF)
     # ==============================================================
-    positions, velocities, orientations, times, eskf = find_best_yaw_and_smooth(
+    positions, velocities, orientations, times, eskf = run_eskf_pipeline(
         df_imu, q_init, init_idx, calib, fs_dynamisch
     )
 

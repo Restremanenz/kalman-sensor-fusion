@@ -1,7 +1,7 @@
 # ==========================================
 # DATEI- UND PFADEINSTELLUNGEN
 # ==========================================
-LOG_FOLDER = "./Data/8sek"
+LOG_FOLDER = "./Data/7sek"
 IMU_CALIB_FILE = "sensor_params.json"
 
 # ==========================================
@@ -17,7 +17,7 @@ MAX_PROCESS_TIME = None
 # ALIGNMENT & INITIALISIERUNG (START-PHASE)
 # ==========================================
 # Toggle: True = Retrograder Madgwick (Dynamisch), False = Static Leveling (Wasserwaage)
-USE_DYNAMIC_ALIGNMENT = False    
+USE_DYNAMIC_ALIGNMENT = True    
 
 # Parameter für das dynamische Alignment (wenn True)
 START_PEAK_THRESHOLD_G = 2    # (g) Ab dieser Beschleunigung gilt der Athlet als gestartet
@@ -33,11 +33,11 @@ FREEFALL_THRESHOLD_G = 0.6           # Unter 0.6g werten wir als "Losgelassen / 
 # ==========================================
 # POST-PROCESSING (RTS Smoother)
 # ==========================================
-USE_SMOOTHER = True            # Smoother ein-/ausschalten
+USE_SMOOTHER = False            # Smoother ein-/ausschalten
 
 # Positions-Ziele am Ende des Laufs
 SMOOTH_TO_BARO_Z = False        # Z-Achse an die exakt letzte Barometer-Höhe angleichen
-SMOOTH_XY_TO_ZERO = True       # X/Y-Achsen exakt über den Startpunkt zwingen
+SMOOTH_XY_TO_ZERO = False       # X/Y-Achsen exakt über den Startpunkt zwingen
 TARGET_X_M = -1.2               # (m) Ziel X (0.0 = exakt über Start)
 TARGET_Y_M = -1               # (m) Ziel Y (0.0 = exakt über Start)
 
