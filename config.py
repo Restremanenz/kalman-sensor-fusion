@@ -29,7 +29,7 @@ WARMUP_BUFFER_SEC = 0.2        # (s) Sicherheitsabstand vom Start-Peak zurück
 # END-DETECTION (Ziel-Erkennung)
 # ==============================================================
 USE_END_DETECTION = True             
-FREEFALL_THRESHOLD_G = 0.6           # Unter 0.6g werten wir als "Losgelassen / Freier Fall"
+FREEFALL_THRESHOLD_G = 0.2           # Unter 0.xg gewertet als Losgelassen / Freier Fall
 
 # ==========================================
 # POST-PROCESSING (RTS Smoother)
@@ -39,8 +39,8 @@ USE_SMOOTHER = True            # Smoother ein-/ausschalten
 # Positions-Ziele am Ende des Laufs
 SMOOTH_TO_BARO_Z = False        # Z-Achse an die exakt letzte Barometer-Höhe angleichen
 SMOOTH_XY_TO_ZERO = True       # X/Y-Achsen exakt über den Startpunkt zwingen
-TARGET_X_M = -1.2               # (m) Ziel X (0.0 = exakt über Start)
-TARGET_Y_M = -0.2               # (m) Ziel Y (0.0 = exakt über Start)
+TARGET_X_M = -1.1               # (m) Ziel X (0.0 = exakt über Start)
+TARGET_Y_M = 0.4 - 0.9              # (m) Ziel Y (0.0 = exakt über Start)
 
 # Geschwindigkeits-Ziele
 # VORSICHT: Nur auf True setzen, wenn der Run komplett bis zum Stillstand/Buzzer läuft!
@@ -50,6 +50,7 @@ FORCE_V_END_ZERO = False
 # ==========================================
 # DOMAIN KNOWLEDGE: VIRTUELLEN KORRIDOR & WAND VORGEBEN
 # ==========================================
+USE_YAW_CORRECTION = True   # True = 2-Pass PCA Korrektur, False = Originaler 1-Pass
 USE_WALL_CONSTRAINT = False
 WALL_INCLINATION_DEG = 5.0    # (Grad) Überhang der genormten Speed-Wand
 
@@ -127,9 +128,9 @@ SHOW_ANIMATED_TRAJECTORY = False
 
 # Sensor-Offsets für die exakte Ausrichtung in den Plots
 VIS_SENSOR_START_Z = 1.1          # (m) Starthöhe des Sensors (Offset Z)
-VIS_SENSOR_OFFSET_Y = 0.3         # (m) Verschiebung auf der Breite (Offset Y)
+VIS_SENSOR_OFFSET_Y = 0.8         # (m) Verschiebung auf der Breite (Offset Y)
 VIS_SENSOR_OFFSET_X = 0.5         # (m) Verschiebung zur Wand in der Seitenansicht (Offset X)
-VIS_MIRROR_Y = True               # Soll die Y-Achse gespiegelt werden? --> rechts entspricht dann +y
+VIS_MIRROR_Y = False               # Soll die Y-Achse gespiegelt werden? --> rechts entspricht dann +y
 VIS_MIRROR_X = True               # Soll die X-Achse gespiegelt werden? --> weck von der Wand entspricht dann +x
 
 # Wand-Eigenschaften für die Visualisierung

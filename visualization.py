@@ -193,8 +193,7 @@ class TrajectoryVisualizer:
         try:
             img = plt.imread(image_path)
             extent = [-1.5, 1.5, 0.0, wall_length]
-            ax.imshow(img, extent=extent, origin='lower', alpha=0.6)
-            print("[INFO] 2D-Hintergrundbild der Speedwand erfolgreich geladen.")
+            ax.imshow(img, extent=extent, origin='upper', alpha=0.6)
         except Exception as e:
             print(f"[WARNUNG] Konnte Hintergrundbild ({image_path}) nicht laden: {e}")
 
@@ -248,7 +247,7 @@ class TrajectoryVisualizer:
         
         plot_pos = positions.copy()
         
-        # -- NEU: Spiegelung und Wand-Richtung --
+        # Spiegelung und Wand-Richtung 
         if getattr(self.config, 'VIS_MIRROR_X', True):
             # Kletterer in den positiven Bereich (+X) spiegeln
             plot_pos[:, 0] = -plot_pos[:, 0]

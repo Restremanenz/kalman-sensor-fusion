@@ -2,6 +2,7 @@ import json
 import numpy as np
 import pandas as pd
 from scipy.spatial.transform import Rotation as R
+from scipy.optimize import minimize_scalar
 
 import config  
 from st_log_reader import STLogReader
@@ -232,7 +233,72 @@ def run_eskf_pipeline(df_imu, q_init, process_start_idx, true_start_idx, calib, 
 
     return positions, velocities, orientations, np.array(times_plot), eskf
 
+def compute_optimal_yaw_correction(positions, velocities, times, target_x, target_y, 
+                                   ignore_start_sec=1.5, alpha=1.0, beta=2.0):
+    """
+    Findet die optimale Rigid-Body-Rotation (Yaw) für die XY-Ebene, 
+    indem die Quergeschwindigkeiten minimiert und der Endpunkt verankert wird.
+    
+    Kostenfunktion: J(θ) = β * mean(v_perp(θ)^2) + α * ||p_N(θ) - d||^2
+    """
+    # 1. Ziel-Vektor d (Die ideale Linie von Start zu Ziel)
+    d = np.array([target_x, target_y])
+    d_norm = np.linalg.norm(d)
+    
+    if d_norm < 1e-6:
+        print("Warnung: Zielvektor ist 0. Keine Ausrichtung möglich.")
+        return 0.0
+        
+    # Hauptbewegungsrichtung (u) und orthogonale Richtung (n, Querbewegung)
+    u = d / d_norm  
+    n = np.array([-u[1], u[0]]) 
+    
+    # 2. Startphase verwerfen (Biomechanik: Erstes Eindrehen ignorieren)
+    # Geht davon aus, dass 'times' in Sekunden ist und bei 0 (oder ähnlich) startet
+    t_rel = times - times[0]
+    valid_idx = t_rel >= ignore_start_sec
+    
+    # Falls die Trajektorie zu kurz ist, Fallback auf alle Daten
+    if np.sum(valid_idx) < 100: 
+        valid_idx = np.ones_like(t_rel, dtype=bool)
+        print("Warnung: Trajektorie zu kurz, nutze alle Daten für PCA.")
+        
+    v_valid = velocities[valid_idx, :2] # Nur X/Y Geschwindigkeiten ab Sekunde X
+    
+    # Endposition (unkorrigiert)
+    p_N = positions[-1, :2]
+    
+    # 3. Kostenfunktion definieren
+    def cost_function(theta):
+        # 2D Rotationsmatrix für Winkel theta
+        c, s = np.cos(theta), np.sin(theta)
+        R_z = np.array([
+            [c, -s], 
+            [s,  c]
+        ])
+        
+        # A. Geschwindigkeiten rotieren und auf Querachse projizieren
+        v_rot = (R_z @ v_valid.T).T
+        v_perp = v_rot @ n
+        # Querbewegungsterm (höher gewichtet, da Form robuster ist als Drift)
+        term_beta = beta * np.mean(v_perp**2) 
+        
+        # B. Endposition rotieren und Abstand zum echten Ziel messen
+        p_N_rot = R_z @ p_N
+        term_alpha = alpha * np.sum((p_N_rot - d)**2)
+        
+        return term_beta + term_alpha
 
+    # 4. Eindimensionale Optimierung (Suche im Bereich von -180° bis +180°)
+    # minimize_scalar ist perfekt und rasend schnell für 1-DOF Probleme
+    res = minimize_scalar(cost_function, bounds=(-np.pi, np.pi), method='bounded')
+    
+    if res.success:
+        return res.x # Der optimale Winkel theta (in Radiant)
+    else:
+        print("Warnung: Optimierung fehlgeschlagen, nutze 0°.")
+        return 0.0
+    
 def main():
     # ==============================================================
     # 1. SETUP & DATEN LADEN
@@ -243,7 +309,7 @@ def main():
     
     df_imu, fs_dynamisch = preprocessor.load_and_merge_data(reader)
 
-# ==============================================================
+    # ==============================================================
     # 2. PRE-PROCESSING (Initialisierung & Barometer)
     # ==============================================================
     if getattr(config, 'USE_AUTO_INIT', True):
@@ -274,11 +340,68 @@ def main():
     df_imu = preprocessor.process_barometer_and_crop(df_imu, P0, true_start_idx, fs_dynamisch)
 
     # ==============================================================
-    # 3. KOPPELNAVIGATION (15-State ESKF)
+    # 3. HIERARCHISCHE SCHÄTZUNG: SCOUT-PASS (Vorwärts-Filter)
     # ==============================================================
-    positions, velocities, orientations, times, eskf = run_eskf_pipeline(
-        df_imu, q_init, process_start_idx, true_start_idx, calib, fs_dynamisch
-    )
+    use_yaw_correction = getattr(config, 'USE_YAW_CORRECTION', True)
+
+    if use_yaw_correction:
+        print("\n" + "="*55)
+        print("🧭 DURCHLAUF 1: SCOUT-PASS (Erkennung der echten Kletterachse)")
+        print("="*55)
+        
+        # WICHTIG: Smoother für den Scout-Pass abschalten!
+        original_smoother = getattr(config, 'USE_SMOOTHER', False)
+        config.USE_SMOOTHER = False 
+        
+        positions_scout, velocities_scout, _, times_scout, _ = run_eskf_pipeline(
+            df_imu, q_init, process_start_idx, true_start_idx, calib, fs_dynamisch
+        )
+        
+        # Lese physikalische Zielkoordinaten aus der Config
+        target_x = getattr(config, 'TARGET_X_M', -1.2)
+        target_y = getattr(config, 'TARGET_Y_M', -0.2)
+        
+        # ==============================================================
+        # 4. OPTIMIERUNG: 1-DOF RIGID BODY ROTATION FINDEN
+        # ==============================================================
+        # Gewichte können getunt werden: 
+        # beta=2.0 (Querbewegung stark bestrafen), alpha=1.0 (Endpunkt sanft anziehen)
+        theta_opt = compute_optimal_yaw_correction(
+            positions_scout, velocities_scout, times_scout, target_x, target_y,
+            ignore_start_sec=0.5, alpha=1.0, beta=2.0
+        )
+        
+        print(f" -> 🎯 Optimierung abgeschlossen!")
+        print(f" -> Berechnete Fehlstellung (Yaw): {np.degrees(theta_opt):.2f}°")
+        
+        # Drehe das initiale Quaternion als starren Körper um die Z-Achse
+        q_yaw = R.from_rotvec([0, 0, theta_opt])
+        q_init_corrected = q_yaw * q_init
+    
+        # ==============================================================
+        # 5. FINALER DURCHLAUF: VORWÄRTS + RTS SMOOTHER
+        # ==============================================================
+        print("\n" + "="*55)
+        print("DURCHLAUF 2: FINALER PASS (Rigid-Body-Corrected + Smoother)")
+        print("="*55)
+        
+        # Smoother wieder aktivieren, damit echter Rausch-Drift geglättet wird
+        config.USE_SMOOTHER = original_smoother
+        
+        # Finale Trajektorie mit korrigiertem Start-Heading berechnen
+        positions, velocities, orientations, times, eskf = run_eskf_pipeline(
+            df_imu, q_init_corrected, process_start_idx, true_start_idx, calib, fs_dynamisch
+        )
+        
+    else:
+        print("\n" + "="*55)
+        print("🧭 YAW-KORREKTUR DEAKTIVIERT (Originaler 1-Pass)")
+        print("="*55)
+        
+        # Dein originaler, direkter Aufruf ohne Vorab-Drehung
+        positions, velocities, orientations, times, eskf = run_eskf_pipeline(
+            df_imu, q_init, process_start_idx, true_start_idx, calib, fs_dynamisch
+        )
 
     # LAUFZEIT BERECHNEN UND AUSGEBEN 
     if len(times) > 1:
@@ -290,7 +413,7 @@ def main():
         print("\n[WARNUNG] Laufzeit konnte nicht berechnet werden (zu wenig Daten).")
 
     # ==============================================================
-    # 5. VISUALISIERUNG
+    # 6. VISUALISIERUNG
     # ==============================================================
     print("Bereite finale 3D-Plots vor...")
     
