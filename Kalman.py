@@ -418,6 +418,26 @@ def main():
         print("\n[WARNUNG] Laufzeit konnte nicht berechnet werden (zu wenig Daten).")
 
     # ==============================================================
+    # VIDEO-DATEN LADEN (Für die Visualisierung)
+    # ==============================================================
+    video_positions = None
+    if getattr(config, 'USE_VIDEO_DATA', False):
+        try:
+            with open(config.VIDEO_DATA_FILE, 'r') as f:
+                v_data = json.load(f)
+            
+            # JSON PositionX -> Y-Achse (Breite), PositionY -> Z-Achse (Höhe)
+            raw_y = np.array(v_data["COG"]["COG_PositionX"]["Raw"]) + config.VIDEO_OFFSET_Y
+            raw_z = np.array(v_data["COG"]["COG_PositionY"]["Raw"]) + config.VIDEO_OFFSET_Z
+            raw_x = np.zeros_like(raw_y) # Tiefe ist 0, da wir nur 2D Video haben
+            
+            # Als Nx3 Array stapeln wie deine positions
+            video_positions = np.column_stack((raw_x, raw_y, raw_z))
+            print(f"[INFO] Videodaten erfolgreich geladen ({len(video_positions)} Frames).")
+        except Exception as e:
+            print(f"[WARNUNG] Konnte Videodaten nicht laden: {e}")
+
+    # ==============================================================
     # 6. VISUALISIERUNG
     # ==============================================================
     print("Bereite finale 3D-Plots vor...")
@@ -430,7 +450,9 @@ def main():
     if getattr(config, 'SHOW_ANIMATED_TRAJECTORY', False):
         vis.plot_animated_trajectory(positions, orientations, fs_dynamisch)
     if getattr(config, 'SHOW_2D_FRONT', True):
-        vis.plot_2d_wall_with_trajectory(positions, velocities)    
+        vis.plot_2d_wall_with_trajectory(positions, velocities) 
+    if getattr(config, 'SHOW_2D_FRONT_VIDEO', True):
+        vis.plot_2d_wall_with_trajectory(positions, velocities, video_positions)        
     if getattr(config, 'SHOW_2D_SIDE', True):
         vis.plot_2d_side_view_with_trajectory(positions, velocities)
     if getattr(config, 'SHOW_VELOCITY', False):

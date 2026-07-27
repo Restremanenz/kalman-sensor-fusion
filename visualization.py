@@ -180,7 +180,7 @@ class TrajectoryVisualizer:
         """Öffnet alle vorbereiteten Fenster gleichzeitig."""
         plt.show()
 
-    def plot_2d_wall_with_trajectory(self, positions, velocities):
+    def plot_2d_wall_with_trajectory(self, positions, velocities, video_positions=None):
         """
         Erstellt einen 2D-Plot (Frontalansicht: Y-Achse = Breite, Z-Achse = Höhe).
         Nutzt Parameter aus der globalen config.py.
@@ -197,27 +197,37 @@ class TrajectoryVisualizer:
         except Exception as e:
             print(f"[WARNUNG] Konnte Hintergrundbild ({image_path}) nicht laden: {e}")
 
-        # Sensordaten anpassen (Kopie!)
-        plot_pos = positions.copy()
+        if video_positions is not None:
+            plot_video = video_positions.copy()
+            if getattr(self.config, 'VIS_MIRROR_Y', True):
+                plot_video[:, 1] = -plot_video[:, 1]
+            
+            # Gleiche optische Offsets wie bei der IMU anwenden
+            plot_video[:, 1] += getattr(self.config, 'VIS_SENSOR_OFFSET_Y', 0.8)
+            plot_video[:, 2] += getattr(self.config, 'VIS_SENSOR_START_Z', 1.1)
+            
+            ax.plot(plot_video[:, 1], plot_video[:, 2], color='white', linestyle='--', 
+                    linewidth=2.5, label='Video COG', zorder=4, dashes=(5, 2))
 
+        # IMU-Trajektorie 
+        plot_pos = positions.copy()
         if getattr(self.config, 'VIS_MIRROR_Y', True):
             plot_pos[:, 1] = -plot_pos[:, 1]
 
-        plot_pos[:, 1] += getattr(self.config, 'VIS_SENSOR_OFFSET_Y', 0.3)
+        plot_pos[:, 1] += getattr(self.config, 'VIS_SENSOR_OFFSET_Y', 0.8)
         plot_pos[:, 2] += getattr(self.config, 'VIS_SENSOR_START_Z', 1.1)
 
-        # Geschwindigkeit berechnen
         v_abs = np.linalg.norm(velocities, axis=1)
         points = np.array([plot_pos[:, 1], plot_pos[:, 2]]).T.reshape(-1, 1, 2)
         segments = np.concatenate([points[:-1], points[1:]], axis=1)
         v_abs_segments = (v_abs[:-1] + v_abs[1:]) / 2.0 
 
-        # Farbige Linie
         colormap = getattr(self.config, 'VIS_COLORMAP', 'turbo')
         norm = plt.Normalize(v_abs_segments.min(), v_abs_segments.max())
         lc = LineCollection(segments, cmap=colormap, norm=norm)
         lc.set_array(v_abs_segments)
         lc.set_linewidth(3.5)
+        lc.set_zorder(3)
 
         line = ax.add_collection(lc)
         cbar = fig.colorbar(line, ax=ax, fraction=0.046, pad=0.04)

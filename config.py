@@ -112,6 +112,15 @@ MAG_UNCERTAINTY = 0.05         # (Gauss)
 MAG_BIAS_RW = 1e-3             # Random Walk für Mag-Bias 
 
 # ==========================================
+# VIDEO ANALYSE INTEGRATION
+# ==========================================
+USE_VIDEO_DATA = True
+VIDEO_DATA_FILE = "/Data/data_Right.json"
+# Offsets, um das Video-Koordinatensystem auf das IMU-Koordinatensystem zu schieben
+VIDEO_OFFSET_Y = 0   # (m) Verschiebung Startgriff zu IMU Startposition (Breite)
+VIDEO_OFFSET_Z = 0   # (m) Verschiebung Startgriff zu IMU Startposition (Höhe)
+
+# ==========================================
 # VISUALISIERUNG
 # ==========================================
 ANIMATION_FPS = 30
@@ -119,7 +128,8 @@ SHOW_RAW_SENSOR_DATA = False
 SHOW_VELOCITY = False   
 SHOW_ALTITUDE = False        
 SHOW_INIT_PLOT = False  
-SHOW_2D_FRONT = True              
+SHOW_2D_FRONT = True
+SHOW_2D_FRONT_VIDEO = True              
 SHOW_2D_SIDE = True
 SHOW_3D_TRAJECTORY = True         
 SHOW_ANIMATED_TRAJECTORY = False     
