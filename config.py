@@ -42,15 +42,16 @@ SMOOTH_XY_TO_ZERO = True       # X/Y-Achsen exakt über den Startpunkt zwingen
 TARGET_X_M = -1.1               # (m) Ziel X (0.0 = exakt über Start)
 TARGET_Y_M = 0.4 - 0.9              # (m) Ziel Y (0.0 = exakt über Start)
 
+TARGET_XY_UNCERTAINTY = 0.1     # Mögliche Abweichung
+
 # Geschwindigkeits-Ziele
-# VORSICHT: Nur auf True setzen, wenn der Run komplett bis zum Stillstand/Buzzer läuft!
-# Bei gekürzten Läufen (MAX_PROCESS_TIME) zwingend auf False lassen!
+# VORSICHT: Nur auf True setzen, wenn der Run komplett bis zum Stillstand läuft!
 FORCE_V_END_ZERO = False
 
 # ==========================================
 # DOMAIN KNOWLEDGE: VIRTUELLEN KORRIDOR & WAND VORGEBEN
 # ==========================================
-USE_YAW_CORRECTION = True   # True = 2-Pass PCA Korrektur, False = Originaler 1-Pass
+USE_YAW_CORRECTION = True   # True = 2-Pass PCA Korrektur, False = Original
 USE_WALL_CONSTRAINT = False
 WALL_INCLINATION_DEG = 5.0    # (Grad) Überhang der genormten Speed-Wand
 
@@ -59,12 +60,9 @@ WALL_INCLINATION_DEG = 5.0    # (Grad) Überhang der genormten Speed-Wand
 # [0.0, 1.0] -> Sensor-Y-Achse zeigt exakt vom Rücken weg.
 # [1.0, 0.0] -> Sensor-X-Achse zeigt exakt vom Rücken weg.
 # [1.0, 1.0] -> Sensor wurde um 45 Grad schief aufgeklebt.
-WALL_NORMAL_XY = [0.0, 1.0]   
+WALL_NORMAL_XY = [-1.0, 0.0]   
 
-WALL_UNCERTAINTY = 0.3              # (m) Toleranz/Gummiband-Effekt (z.B. 30 cm)
-
-WALL_DISABLE_ON_DESCENT = False      # Automatische Abschaltung beim Abseilen
-DESCENT_DETECTION_THRESHOLD = 0.3   # (m) Ab welchem Höhenverlust gilt der Lauf als "beendet"?
+WALL_UNCERTAINTY = 0.8             # (m) Toleranz/Gummiband-Effekt (z.B. 30 cm)
 
 # ==========================================
 # KALMAN FILTER TUNING 

@@ -209,7 +209,8 @@ def run_eskf_pipeline(df_imu, q_init, process_start_idx, true_start_idx, calib, 
         # Zwinge Position auf Startpunkt-Linie (z.B. für RTO)
         if getattr(config, 'SMOOTH_XY_TO_ZERO', False):
             target_xy = np.array([getattr(config, 'TARGET_X_M', 0.0), getattr(config, 'TARGET_Y_M', 0.0)])
-            eskf.update_position_xy(target_xy, uncertainty=0.001) # 1mm Unsicherheit -> Sehr hartes Update
+            xy_unc = getattr(config, 'TARGET_XY_UNCERTAINTY', 0.3)
+            eskf.update_position_xy(target_xy, uncertainty=xy_unc) 
             applied_boundary = True
 
         # Zwinge Z-Position auf exakte letzte Barometer-Messung
@@ -351,7 +352,10 @@ def main():
         
         # WICHTIG: Smoother für den Scout-Pass abschalten!
         original_smoother = getattr(config, 'USE_SMOOTHER', False)
+        original_wall_constraint = getattr(config, 'USE_WALL_CONSTRAINT', False)
+
         config.USE_SMOOTHER = False 
+        config.USE_WALL_CONSTRAINT = False
         
         positions_scout, velocities_scout, _, times_scout, _ = run_eskf_pipeline(
             df_imu, q_init, process_start_idx, true_start_idx, calib, fs_dynamisch
@@ -387,6 +391,7 @@ def main():
         
         # Smoother wieder aktivieren, damit echter Rausch-Drift geglättet wird
         config.USE_SMOOTHER = original_smoother
+        config.USE_WALL_CONSTRAINT = original_wall_constraint
         
         # Finale Trajektorie mit korrigiertem Start-Heading berechnen
         positions, velocities, orientations, times, eskf = run_eskf_pipeline(
