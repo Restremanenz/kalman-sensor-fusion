@@ -439,6 +439,10 @@ def main():
         vis.plot_raw_sensor_data(df_imu)
     if getattr(config, 'SHOW_ALTITUDE', False):
         vis.plot_altitude(df_imu)
+    if getattr(config, 'SHOW_HIP_ROTATION', True):
+        vis.plot_hip_rotation(times, orientations)
+    if getattr(config, 'SHOW_2D_FRONT_YAW', True):
+        vis.plot_2d_wall_with_yaw(positions, orientations)
 
     vis.show_all()
     

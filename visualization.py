@@ -308,3 +308,107 @@ class TrajectoryVisualizer:
         ax.legend(loc='upper right')
         ax.grid(True, linestyle='--', alpha=0.3)
         plt.tight_layout()
+
+    def plot_hip_rotation(self, times, orientations):
+        """Plottet die Hüftrotation (Euler-Winkel) über die Zeit."""
+        
+        # Konvertiere die Liste der Scipy-Rotationsobjekte in Euler-Winkel (in Grad)
+        # 'ZYX' entspricht Yaw, Pitch, Roll
+        euler_angles = np.array([q.as_euler('ZYX', degrees=True) for q in orientations])
+        
+        yaw = euler_angles[:, 0]
+        pitch = euler_angles[:, 1]
+        roll = euler_angles[:, 2]
+
+        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 9), sharex=True)
+
+        # 1. Yaw (Z-Achse) - Die wichtigste Metrik für Speedklettern!
+        ax1.plot(times, yaw, color='#9467bd', linewidth=2, label='Yaw (Z-Rotation)')
+        ax1.set_title('Hüft-Eindrehung (Yaw) - Linke vs. Rechte Hüfte zur Wand')
+        ax1.set_ylabel('Winkel [°]')
+        ax1.grid(True, linestyle='--', alpha=0.6)
+        ax1.axhline(0, color='black', linewidth=1, alpha=0.5, linestyle='-') # 0° Referenz
+        ax1.legend(loc='upper right')
+
+        # 2. Pitch (Y-Achse)
+        ax2.plot(times, pitch, color='#8c564b', linewidth=2, label='Pitch (Y-Rotation)')
+        ax2.set_title('Beugung (Pitch) - Hüfte an die Wand drücken vs. Durchhängen')
+        ax2.set_ylabel('Winkel [°]')
+        ax2.grid(True, linestyle='--', alpha=0.6)
+        ax2.legend(loc='upper right')
+
+        # 3. Roll (X-Achse)
+        ax3.plot(times, roll, color='#e377c2', linewidth=2, label='Roll (X-Rotation)')
+        ax3.set_title('Seitliches Kippen (Roll) - Becken-Tilt')
+        ax3.set_ylabel('Winkel [°]')
+        ax3.set_xlabel('Zeit [s]')
+        ax3.grid(True, linestyle='--', alpha=0.6)
+        ax3.legend(loc='upper right')
+
+        plt.tight_layout()
+
+    def plot_2d_wall_with_yaw(self, positions, orientations):
+        """
+        Erstellt die 2D-Frontalansicht, färbt die Trajektorie aber nach der 
+        Hüft-Eindrehung (Yaw-Winkel) statt nach Geschwindigkeit ein.
+        """
+        fig, ax = plt.subplots(figsize=(5, 12)) 
+        
+        # Hintergrundbild laden (exakt wie in deiner anderen Methode)
+        image_path = getattr(self.config, 'VIS_WALL_BG_IMAGE', "speedwall_2D.png")
+        wall_length = getattr(self.config, 'VIS_WALL_LENGTH', 15.0)
+
+        try:
+            img = plt.imread(image_path)
+            extent = [-1.5, 1.5, 0.0, wall_length]
+            # origin='upper' falls das Bild vorher auf dem Kopf stand!
+            ax.imshow(img, extent=extent, origin='upper', alpha=0.6) 
+        except Exception as e:
+            pass
+
+        # Positionen kopieren und Offsets anwenden
+        plot_pos = positions.copy()
+        if getattr(self.config, 'VIS_MIRROR_Y', True):
+            plot_pos[:, 1] = -plot_pos[:, 1]
+        
+        plot_pos[:, 1] += getattr(self.config, 'VIS_SENSOR_OFFSET_Y', 0.3)
+        plot_pos[:, 2] += getattr(self.config, 'VIS_SENSOR_START_Z', 1.1)
+
+        # --- NEU: Yaw-Winkel aus Orientierungen berechnen ---
+        euler_angles = np.array([q.as_euler('ZYX', degrees=True) for q in orientations])
+        yaw = euler_angles[:, 0]  # Z-Rotation
+        
+        # Segmente für den Linien-Plot vorbereiten
+        points = np.array([plot_pos[:, 1], plot_pos[:, 2]]).T.reshape(-1, 1, 2)
+        segments = np.concatenate([points[:-1], points[1:]], axis=1)
+        yaw_segments = (yaw[:-1] + yaw[1:]) / 2.0 
+
+        # --- NEU: Diverging Colormap (Blau - Weiß - Rot) ---
+        # Wir fixieren die Skala symmetrisch, z.B. von -45° bis +45°
+        max_angle = 60.0  # Erhöhe diesen Wert, falls der Kletterer sich weiter als 60° dreht
+        norm = plt.Normalize(vmin=-max_angle, vmax=max_angle)
+        
+        # 'coolwarm' oder 'bwr' (Blue-White-Red) eignen sich perfekt
+        lc = LineCollection(segments, cmap='coolwarm', norm=norm)
+        lc.set_array(yaw_segments)
+        lc.set_linewidth(4.0)
+
+        line = ax.add_collection(lc)
+        cbar = fig.colorbar(line, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label('Hüft-Eindrehung (Yaw) [°]\nBlau = Linke Hüfte | Rot = Rechte Hüfte', rotation=270, labelpad=25)
+        
+        # Start und Ende markieren
+        ax.scatter(plot_pos[0, 1], plot_pos[0, 2], color='green', s=120, zorder=5, label='Start', edgecolors='white')
+        ax.scatter(plot_pos[-1, 1], plot_pos[-1, 2], color='red', s=120, zorder=5, label='Ende', edgecolors='white')
+
+        ax.set_aspect('equal')
+        ax.set_xlim([-1.8, 1.8])
+        ax.set_ylim([-0.5, wall_length + 0.5])
+        
+        ax.set_xlabel('Y-Achse (Breite) [m]')
+        ax.set_ylabel('Z-Achse (Höhe) [m]')
+        ax.set_title('Rotation-Heatmap: Hüft-Eindrehung an der Wand')
+        
+        ax.legend(loc='upper left')
+        ax.grid(True, linestyle='--', alpha=0.3)
+        plt.tight_layout()

@@ -122,7 +122,9 @@ SHOW_INIT_PLOT = False
 SHOW_2D_FRONT = True              
 SHOW_2D_SIDE = True
 SHOW_3D_TRAJECTORY = True         
-SHOW_ANIMATED_TRAJECTORY = False              
+SHOW_ANIMATED_TRAJECTORY = False     
+SHOW_HIP_ROTATION = False      
+SHOW_2D_FRONT_YAW = False   
 
 # Sensor-Offsets für die exakte Ausrichtung in den Plots
 VIS_SENSOR_START_Z = 1.1          # (m) Starthöhe des Sensors (Offset Z)
