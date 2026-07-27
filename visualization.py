@@ -202,20 +202,30 @@ class TrajectoryVisualizer:
             if getattr(self.config, 'VIS_MIRROR_Y', True):
                 plot_video[:, 1] = -plot_video[:, 1]
             
-            # Gleiche optische Offsets wie bei der IMU anwenden
-            plot_video[:, 1] += getattr(self.config, 'VIS_SENSOR_OFFSET_Y', 0.8)
-            plot_video[:, 2] += getattr(self.config, 'VIS_SENSOR_START_Z', 1.1)
+            # WICHTIG: Keine visuellen Offsets mehr addieren! 
+            # Das Video hat in main.py bereits exakte Weltkoordinaten bekommen.
             
             ax.plot(plot_video[:, 1], plot_video[:, 2], color='white', linestyle='--', 
                     linewidth=2.5, label='Video COG', zorder=4, dashes=(5, 2))
 
-        # IMU-Trajektorie 
+# IMU-Trajektorie 
         plot_pos = positions.copy()
         if getattr(self.config, 'VIS_MIRROR_Y', True):
             plot_pos[:, 1] = -plot_pos[:, 1]
 
-        plot_pos[:, 1] += getattr(self.config, 'VIS_SENSOR_OFFSET_Y', 0.8)
-        plot_pos[:, 2] += getattr(self.config, 'VIS_SENSOR_START_Z', 1.1)
+        # SMARTE OFFSETS (Rückwärtskompatibilität) ---
+        # Prüfen, ob die Trajektorie bei 0,0,0 startete (Video war aus)
+        start_is_zero = np.allclose(positions[0], np.zeros(3), atol=1e-3)
+        
+        if start_is_zero:
+            offset_y = getattr(self.config, 'VIS_SENSOR_OFFSET_Y', 0.8)
+            offset_z = getattr(self.config, 'VIS_SENSOR_START_Z', 1.1)
+        else:
+            offset_y = 0.0 # Trajektorie hat bereits Weltkoordinaten aus dem Video
+            offset_z = 0.0
+            
+        plot_pos[:, 1] += offset_y
+        plot_pos[:, 2] += offset_z
 
         v_abs = np.linalg.norm(velocities, axis=1)
         points = np.array([plot_pos[:, 1], plot_pos[:, 2]]).T.reshape(-1, 1, 2)
@@ -268,8 +278,15 @@ class TrajectoryVisualizer:
             # Wand muss nach links (-X) überhängen
             wall_direction = -1.0 
             
-        # Offsets anwenden
-        plot_pos[:, 2] += getattr(self.config, 'VIS_SENSOR_START_Z', 1.1)
+        # --- SMARTE OFFSETS (Rückwärtskompatibilität) ---
+        start_is_zero = np.allclose(positions[0], np.zeros(3), atol=1e-3)
+        
+        if start_is_zero:
+            offset_z = getattr(self.config, 'VIS_SENSOR_START_Z', 1.1)
+        else:
+            offset_z = 0.0 # Z hat durch das Video bereits absolute Weltkoordinaten
+            
+        plot_pos[:, 2] += offset_z
         plot_pos[:, 0] += getattr(self.config, 'VIS_SENSOR_OFFSET_X', 0.2)
 
         wall_length = getattr(self.config, 'VIS_WALL_LENGTH', 15.0)

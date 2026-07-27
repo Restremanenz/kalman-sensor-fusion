@@ -285,3 +285,12 @@ class FilterpyESKF:
         # Das Rauschen (uncertainty) wirkt wie ein Gummiband. 
         # z.B. 0.3m bedeutet: Der Filter toleriert es, wenn der Kletterer sich leicht von der Wand wegdrückt.
         self._robust_update(z=innovation, H=H, R=np.array([[uncertainty**2]]))
+        
+    def update_video_2d(self, video_y, video_z, uncertainty=0.1):
+        """2D Positions-Update aus der Videoanalyse (Y und Z)."""
+        H = np.zeros((2, self.dim_x))
+        H[0, 1] = 1.0  # Mapping auf State Y (Breite)
+        H[1, 2] = 1.0  # Mapping auf State Z (Höhe)
+        
+        innovation = np.array([video_y, video_z]) - self.p[1:3]
+        self._robust_update(z=innovation, H=H, R=np.eye(2) * (uncertainty**2))

@@ -114,11 +114,15 @@ MAG_BIAS_RW = 1e-3             # Random Walk für Mag-Bias
 # ==========================================
 # VIDEO ANALYSE INTEGRATION
 # ==========================================
-USE_VIDEO_DATA = True
-VIDEO_DATA_FILE = "/Data/data_Right.json"
-# Offsets, um das Video-Koordinatensystem auf das IMU-Koordinatensystem zu schieben
-VIDEO_OFFSET_Y = 0   # (m) Verschiebung Startgriff zu IMU Startposition (Breite)
-VIDEO_OFFSET_Z = 0   # (m) Verschiebung Startgriff zu IMU Startposition (Höhe)
+USE_VIDEO_DATA = False
+VIDEO_DATA_FILE = "./Data/data_Right.json"
+
+VIDEO_UNCERTAINTY = 0.3        # (m) Messrauschen des Video-Systems
+SYNC_VELOCITY_THRESHOLD = 0.5  # (m/s) Schwellenwert für den kinematischen Start
+
+# Genormte Speedwand-Konstanten
+STARTGRIFF_Y_M = 0.75          # (m) Der 1. Griff ist 75cm rechts vom Wand-Nullpunkt
+STARTGRIFF_Z_M = 1.6875          # (m) Montagehöhe des Griffs (Boden bis Griff)
 
 # ==========================================
 # VISUALISIERUNG
