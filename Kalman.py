@@ -24,7 +24,6 @@ class IMUCalibration:
             
             # 2. Gyroskop Parameter laden
             self.gyro_bias = np.array(data["gyro"]["offset_b"])
-            self.gyro_noise_std = np.array(config.GYRO_NOISE_STD)
 
             # 3. Magnetometer Parameter laden
             self.mag_bias = np.array(data["mag"]["offset_b"])
@@ -140,16 +139,16 @@ def run_eskf_pipeline(df_imu, q_init, process_start_idx, true_start_idx, calib, 
     eskf = FilterpyESKF(
         initial_pos = [0.0, 0.0, 0.0], 
         initial_q = q_init, 
-        gyro_noise_std = calib.gyro_noise_std,
-        accel_noise = config.ACCEL_NOISE_DENSITY,
-        bg_rw = np.array(config.GYRO_BIAS_RW), 
-        ba_rw = config.ACCEL_BIAS_RW, 
+        gyro_noise_density = np.array(config.GYRO_NOISE_DENSITY),
+        accel_noise_density = config.ACCEL_NOISE_DENSITY,
+        bg_rw_density = np.array(config.GYRO_BIAS_RW_DENSITY),
+        ba_rw_density = config.ACCEL_BIAS_RW_DENSITY,
         grav_unc = config.GRAVITY_UNCERTAINTY,
         zupt_unc = config.ZUPT_UNCERTAINTY,
         baro_unc = config.BARO_UNCERTAINTY,
         zaru_unc = config.ZARU_UNCERTAINTY,
         use_18_state = mag_in_run_active,
-        mag_rw = config.MAG_BIAS_RW,
+        mag_rw_density = config.MAG_BIAS_RW,
         mag_unc = config.MAG_UNCERTAINTY
     )
     
@@ -296,6 +295,11 @@ def run_eskf_pipeline(df_imu, q_init, process_start_idx, true_start_idx, calib, 
         positions, velocities, orientations = smoother.smooth()
     else:
         positions, velocities, orientations = smoother.get_forward_states()
+
+    # Die Filtertrajektorie ist relativ zum physischen Start definiert.
+    # Der Smoother darf diesen lokalen Koordinatenursprung nicht verschieben.
+    if len(positions) > 0:
+        positions = positions - positions[0]
 
     return positions, velocities, orientations, np.array(times_plot), eskf
 

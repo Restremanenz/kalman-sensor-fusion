@@ -8,12 +8,12 @@ from filterpy.kalman import KalmanFilter
 import config
 
 class FilterpyESKF:
-    def __init__(self, initial_pos, initial_q, gyro_noise_std, accel_noise, bg_rw, ba_rw, 
-                 grav_unc, zupt_unc, baro_unc, zaru_unc, use_18_state=False, mag_rw=1e-5, mag_unc=0.5):
+    def __init__(self, initial_pos, initial_q, gyro_noise_density, accel_noise_density,
+                 bg_rw_density, ba_rw_density, grav_unc, zupt_unc, baro_unc,
+                 zaru_unc, use_18_state=False, mag_rw_density=1e-5, mag_unc=0.5):
         
         self.use_18_state = use_18_state
         self.dim_x = 18 if use_18_state else 15  # Dynamische Matrixgröße
-        self.dim_noise = 15 if use_18_state else 12
 
         self.p = np.array(initial_pos, dtype=float)
         self.v = np.zeros(3)
@@ -36,14 +36,18 @@ class FilterpyESKF:
         if self.use_18_state:
             self.kf.P[15:18, 15:18] *= 0.5 # Mag-Bias Startunsicherheit
         
-        # Base Process Noise dynamisch anpassen
-        self.base_Q = np.zeros((self.dim_noise, self.dim_noise))
-        self.base_Q[0:3, 0:3] = np.eye(3) * (accel_noise)**2  
-        self.base_Q[3:6, 3:6] = np.diag(gyro_noise_std**2)
-        self.base_Q[6:9, 6:9] = np.eye(3) * (ba_rw)**2
-        self.base_Q[9:12, 9:12] = np.eye(3) * (bg_rw)**2
-        if self.use_18_state:
-            self.base_Q[12:15, 12:15] = np.eye(3) * (mag_rw)**2
+        accel_density = np.broadcast_to(np.asarray(accel_noise_density, dtype=float), 3)
+        gyro_density = np.broadcast_to(np.asarray(gyro_noise_density, dtype=float), 3)
+        ba_density = np.broadcast_to(np.asarray(ba_rw_density, dtype=float), 3)
+        bg_density = np.broadcast_to(np.asarray(bg_rw_density, dtype=float), 3)
+        mag_density = np.broadcast_to(np.asarray(mag_rw_density, dtype=float), 3)
+
+        # Kontinuierliche spektrale Kovarianzen der Sensor- und Biasrauschen.
+        self.Qc_acc = np.diag(accel_density**2)
+        self.Qc_gyro = np.diag(gyro_density**2)
+        self.Qc_ba = np.diag(ba_density**2)
+        self.Qc_bg = np.diag(bg_density**2)
+        self.Qc_bm = np.diag(mag_density**2)
 
         # Messrauschen
         self.R_grav = np.eye(3) * (grav_unc)**2  
@@ -79,19 +83,32 @@ class FilterpyESKF:
         F_x[3:6, 9:12] = -R_mat * dt              
         F_x[6:9, 12:15] = -R_mat * dt             
 
-        # Jacobian F_i dynamisch bauen
-        F_i = np.zeros((self.dim_x, self.dim_noise))
-        F_i[3:6, 0:3] = R_mat * dt                
-        F_i[6:9, 3:6] = R_mat * dt                
-        F_i[9:12, 6:9] = np.eye(3) * dt           
-        F_i[12:15, 9:12] = np.eye(3) * dt         
-        
+        # Kontinuierliche Rauschdichten korrekt über dt diskretisieren.
+        Q_d = np.zeros((self.dim_x, self.dim_x))
+        dt_2 = dt**2
+        dt_3 = dt**3
+
+        # Weißes Beschleunigungsrauschen wird aus dem Body- in das
+        # Weltkoordinatensystem gedreht und in Position/Geschwindigkeit integriert.
+        Q_acc_world = R_mat @ self.Qc_acc @ R_mat.T
+        Q_d[0:3, 0:3] = Q_acc_world * (dt_3 / 3.0)
+        Q_d[0:3, 3:6] = Q_acc_world * (dt_2 / 2.0)
+        Q_d[3:6, 0:3] = Q_acc_world * (dt_2 / 2.0)
+        Q_d[3:6, 3:6] = Q_acc_world * dt
+
+        # Weißes Gyroskoprauschen treibt den globalen Orientierungsfehler.
+        Q_gyro_world = R_mat @ self.Qc_gyro @ R_mat.T
+        Q_d[6:9, 6:9] = Q_gyro_world * dt
+
+        # Random-Walk-Anregung der Biaszustände.
+        Q_d[9:12, 9:12] = self.Qc_ba * dt
+        Q_d[12:15, 12:15] = self.Qc_bg * dt
+
         if self.use_18_state:
-            # Mag RW mappt 1:1 auf den Mag-Bias Error-State
-            F_i[15:18, 12:15] = np.eye(3) * dt
+            Q_d[15:18, 15:18] = self.Qc_bm * dt
 
         self.kf.F = F_x
-        self.kf.Q = F_i @ self.base_Q @ F_i.T
+        self.kf.Q = 0.5 * (Q_d + Q_d.T)
         self.kf.predict()
 
     def _inject_error_and_reset(self):

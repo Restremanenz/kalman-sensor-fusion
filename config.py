@@ -73,20 +73,19 @@ BARO_UNCERTAINTY = 0.3         # (m) Messrauschen des Barometers
 USE_BARO_PRE_FILTER = True     # Zero-Phase Filter für Barometer
 BARO_CUTOFF_HZ = 1.5           
 
-# Prozessrauschen (Q): IMU-Integration
-ACCEL_NOISE_DENSITY = 0.05      # (m/s^2) Je höher, desto mehr vertraut der Filter auf externe Updates
+# Kontinuierliche Prozessrauschdichten (Q)
+# Aus der stationären Messung: ca. 0.0022 bis 0.0030 (m/s²)/sqrt(Hz)
+ACCEL_NOISE_DENSITY = 0.003
 
 # Messrauschen (R)
 GRAVITY_UNCERTAINTY = 0.5      # (m/s^2) 
 
-# Allan Variance Parameter
-# Weißes Rauschen (Angle Random Walk) in rad/s
-GYRO_NOISE_STD = [4.752365e-05, 5.086460e-05, 3.940751e-05]
+# Angle Random Walk aus der Allan-Deviation bei tau = 1 s
+GYRO_NOISE_DENSITY = [4.752365e-05, 5.086460e-05, 3.940751e-05]
 
-# Bias Instability (Random Walk) 
-# Erlaubt dem Filter, den Gyro- und Accel-Bias während des Laufs anzupassen
-ACCEL_BIAS_RW = 1e-4           # Wie schnell darf sich der Accel-Bias ändern?
-GYRO_BIAS_RW = [3.937686e-06, 6.420872e-06, 9.472721e-06]
+# Kontinuierliche Random-Walk-Anregung der Biaszustände
+ACCEL_BIAS_RW_DENSITY = 1e-4
+GYRO_BIAS_RW_DENSITY = [3.937686e-06, 6.420872e-06, 9.472721e-06]
 
 # ==========================================
 # ROBUSTE STILLSTANDSERKENNUNG (ZUPT)
