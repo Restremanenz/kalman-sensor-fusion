@@ -226,7 +226,16 @@ def run_eskf_pipeline(df_imu, q_init, process_start_idx, true_start_idx, calib, 
         # ESKF KOPPELNAVIGATION
         eskf.predict(acc_calib, gyro_calib, dt)
         if smoother_started:
-            smoother.save_predict(eskf.kf.F, eskf.kf.P) 
+            smoother.save_predict(
+                eskf.p,
+                eskf.v,
+                eskf.q,
+                eskf.ba,
+                eskf.bg,
+                eskf.bm if mag_in_run_active else np.zeros(3),
+                eskf.kf.F,
+                eskf.kf.P
+            )
         
         current_alt = row['Altitude_filt [m]']
         if current_alt > peak_altitude:
