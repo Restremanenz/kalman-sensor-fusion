@@ -61,9 +61,9 @@ WALL_FRAME_BASE_YAW_DEG = 180.0     # (Grad) Basis-Drehung des Wandkoordinatensy
 
 # Korrektur der reproduzierbaren Hüftstellung beim Start.
 # Positiv = von oben gegen den Uhrzeigersinn, negativ = im Uhrzeigersinn.
-START_POSE_YAW_CORRECTION_DEG = 0.0
+START_POSE_YAW_CORRECTION_DEG = -10.0
 
-USE_WALL_CONSTRAINT = False
+USE_WALL_CONSTRAINT = True
 WALL_INCLINATION_DEG = 5.0    # (Grad) Überhang der genormten Speed-Wand
 
 # Normalenrichtung der Wand im oben definierten Wandkoordinatensystem.
@@ -71,6 +71,15 @@ WALL_INCLINATION_DEG = 5.0    # (Grad) Überhang der genormten Speed-Wand
 WALL_NORMAL_XY = [1.0, 0.0]
 
 WALL_UNCERTAINTY = 0.8             # (m) Toleranz/Gummiband-Effekt 
+
+# Seitliche Grenzen als absolute Koordinaten der Speedwand.
+# +Y zeigt nach rechts, -Y nach links. Intern werden die Grenzen automatisch
+# relativ zur Startposition des Sensors umgerechnet.
+USE_LATERAL_CORRIDOR = True
+CORRIDOR_Y_MIN_M = -1.5
+CORRIDOR_Y_MAX_M = 1.5
+CORRIDOR_UNCERTAINTY = 0.2
+CORRIDOR_UPDATE_HZ = 20.0
 
 # ==========================================
 # KALMAN FILTER TUNING 
@@ -121,8 +130,19 @@ MAG_BIAS_RW = 1e-3             # Random Walk für Mag-Bias
 # ==========================================
 # VIDEO ANALYSE INTEGRATION
 # ==========================================
-USE_VIDEO_DATA = False
+# Video einlesen, zeitlich synchronisieren und für Vergleichsplots bereitstellen.
+USE_VIDEO_DATA = True
+
+# True: Video-Y/Z als Positionsmessung in den ESKF einspeisen.
+# False: Video bleibt eine unabhängige Referenz und wird nur geplottet.
+USE_VIDEO_IN_FILTER = False
+
 VIDEO_DATA_FILE = "./Data/data_Right.json"
+
+# Darstellung im Vergleichsplot:
+# "START_ALIGNED" = Videostart nur im Plot auf den IMU-Start verschieben.
+# "ABSOLUTE"      = beide Trajektorien in ihren absoluten Wandkoordinaten.
+VIDEO_COMPARISON_MODE = "START_ALIGNED"
 
 VIDEO_UNCERTAINTY = 0.3        # (m) Messrauschen des Video-Systems
 SYNC_VELOCITY_THRESHOLD = 0.5  # (m/s) Schwellenwert für den kinematischen Start
@@ -145,12 +165,12 @@ SHOW_2D_SIDE = True
 SHOW_3D_TRAJECTORY = True         
 SHOW_ANIMATED_TRAJECTORY = False     
 SHOW_HIP_ROTATION = False      
-SHOW_2D_FRONT_YAW = False   
+SHOW_2D_FRONT_YAW = True
 
-# Sensor-Offsets für die exakte Ausrichtung in den Plots
-VIS_SENSOR_START_Z = 1.1          # (m) Starthöhe des Sensors (Offset Z)
-VIS_SENSOR_OFFSET_Y = 0.8         # (m) Startposition nach rechts (+Y)
-VIS_SENSOR_OFFSET_X = 0.5         # (m) Startabstand von der Wand (+X)
+# Absolute Sensorstartposition im Wandkoordinatensystem [X, Y, Z].
+# Diese Position ist unabhängig davon, ob Videodaten geladen werden.
+SENSOR_START_POSITION_WALL_M = [0.5, 0.8, 1.1]
+
 # Wand-Eigenschaften für die Visualisierung
 VIS_WALL_LENGTH = 15.0            # (m) Länge der Kletterwand
 VIS_WALL_THICKNESS = 0.10         # (m) Dicke der gezeichneten Wand im Plot

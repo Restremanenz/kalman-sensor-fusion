@@ -271,6 +271,44 @@ class FilterpyESKF:
         innovation = target_z - self.p[2]
         self._robust_update(z=innovation, H=H, R=np.array([[uncertainty**2]]))
 
+    def update_lateral_corridor(self, y_min, y_max, uncertainty=0.2):
+        """Wendet außerhalb des erlaubten Y-Korridors eine weiche Grenze an.
+
+        Innerhalb des Korridors bleibt der Zustand unverändert. Außerhalb wird
+        die nächstgelegene Grenze als eindimensionale Positionsmessung genutzt.
+        Die übergebenen Grenzen müssen im lokalen Filterkoordinatensystem liegen.
+
+        Returns
+        -------
+        bool
+            True, wenn der Constraint eingegriffen hat, sonst False.
+        """
+        y_min = float(y_min)
+        y_max = float(y_max)
+        uncertainty = float(uncertainty)
+
+        if not np.isfinite([y_min, y_max, uncertainty]).all():
+            raise ValueError("Korridorgrenzen und Unsicherheit müssen endlich sein.")
+        if y_min >= y_max:
+            raise ValueError("CORRIDOR_Y_MIN_M muss kleiner als CORRIDOR_Y_MAX_M sein.")
+        if uncertainty <= 0.0:
+            raise ValueError("CORRIDOR_UNCERTAINTY muss größer als 0 sein.")
+
+        current_y = float(self.p[1])
+        if current_y < y_min:
+            target_y = y_min
+        elif current_y > y_max:
+            target_y = y_max
+        else:
+            return False
+
+        H = np.zeros((1, self.dim_x))
+        H[0, 1] = 1.0
+        innovation = np.array([target_y - current_y])
+        measurement_noise = np.array([[uncertainty**2]])
+        self._robust_update(z=innovation, H=H, R=measurement_noise)
+        return True
+
     def update_wall_constraint(self, normal_xy, inclination_deg, uncertainty=0.3):
         """
         Soft Constraint: Zwingt den Kletterer an die überhängende Wand (z.B. 5°).

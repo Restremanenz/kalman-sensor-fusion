@@ -146,7 +146,16 @@ def align_initial_orientation_to_wall(q_initial, base_yaw_deg, start_pose_yaw_de
     return wall_rotation * q_initial, total_yaw_deg
 
 
-def run_eskf_pipeline(df_imu, q_init, process_start_idx, true_start_idx, calib, fs_dynamisch):
+def run_eskf_pipeline(
+        df_imu,
+        q_init,
+        process_start_idx,
+        true_start_idx,
+        calib,
+        fs_dynamisch,
+        wall_start_y=0.0,
+        apply_lateral_corridor=True
+):
     mag_in_run_active = config.USE_MAGNETOMETER and config.USE_18_STATE_ESKF
     
     eskf = FilterpyESKF(
@@ -172,6 +181,22 @@ def run_eskf_pipeline(df_imu, q_init, process_start_idx, true_start_idx, calib, 
     times = df_imu["Time"].values
     last_baro_time = -1.0 
     last_mag_time = -1.0
+
+    corridor_enabled = (
+        apply_lateral_corridor
+        and getattr(config, 'USE_LATERAL_CORRIDOR', False)
+    )
+    corridor_hits = 0
+    last_corridor_update_time = -np.inf
+
+    if corridor_enabled:
+        corridor_y_min = float(getattr(config, 'CORRIDOR_Y_MIN_M', -1.5)) - wall_start_y
+        corridor_y_max = float(getattr(config, 'CORRIDOR_Y_MAX_M', 1.5)) - wall_start_y
+        corridor_uncertainty = float(getattr(config, 'CORRIDOR_UNCERTAINTY', 0.2))
+        corridor_update_hz = float(getattr(config, 'CORRIDOR_UPDATE_HZ', 20.0))
+        if corridor_update_hz <= 0.0:
+            raise ValueError("CORRIDOR_UPDATE_HZ muss größer als 0 sein.")
+        corridor_update_interval = 1.0 / corridor_update_hz
     
     peak_altitude = 0.0
     final_baro_z = 0.0
@@ -282,10 +307,34 @@ def run_eskf_pipeline(df_imu, q_init, process_start_idx, true_start_idx, calib, 
                 eskf.update_zaru(gyro_calib)   
                 eskf.update_gravity(acc_calib) 
 
-        # Video Update einspielen
-        if getattr(config, 'USE_VIDEO_DATA', False) and 'Video_Y' in df_imu.columns and pd.notna(row['Video_Y']):
+        # Video nur dann als Messung einspielen, wenn die Filterfusion explizit
+        # aktiviert ist. Im Vergleichsmodus bleiben IMU und Video unabhängig.
+        use_video_in_filter = (
+            getattr(config, 'USE_VIDEO_DATA', False)
+            and getattr(config, 'USE_VIDEO_IN_FILTER', False)
+        )
+        if (
+            use_video_in_filter
+            and 'Video_Y' in df_imu.columns
+            and 'Video_Z' in df_imu.columns
+            and pd.notna(row['Video_Y'])
+            and pd.notna(row['Video_Z'])
+        ):
             unc = getattr(config, 'VIDEO_UNCERTAINTY', 0.1)
             eskf.update_video_2d(row['Video_Y'], row['Video_Z'], uncertainty=unc)
+
+        if (
+            corridor_enabled
+            and (times[i] - last_corridor_update_time) >= corridor_update_interval
+        ):
+            last_corridor_update_time = times[i]
+            corridor_hits += int(
+                eskf.update_lateral_corridor(
+                    corridor_y_min,
+                    corridor_y_max,
+                    uncertainty=corridor_uncertainty
+                )
+            )
 
         if smoother_started:
             smoother.save_update(
@@ -293,6 +342,15 @@ def run_eskf_pipeline(df_imu, q_init, process_start_idx, true_start_idx, calib, 
                 eskf.bm if mag_in_run_active else np.zeros(3), eskf.kf.P
             )
             times_plot.append(times[i])
+
+    if corridor_enabled:
+        print(
+            f" -> Y-Korridor absolut "
+            f"[{getattr(config, 'CORRIDOR_Y_MIN_M', -1.5):+.2f}, "
+            f"{getattr(config, 'CORRIDOR_Y_MAX_M', 1.5):+.2f}] m | "
+            f"lokal [{corridor_y_min:+.2f}, {corridor_y_max:+.2f}] m | "
+            f"Eingriffe: {corridor_hits}"
+        )
 
     # BOUNDARY CONDITIONS & RTS SMOOTHING
     if getattr(config, 'USE_SMOOTHER', False):
@@ -399,7 +457,13 @@ def main():
     config.USE_WALL_CONSTRAINT = False
     
     positions_scout, velocities_scout, _, times_scout, _ = run_eskf_pipeline(
-        df_imu, q_init_wall, process_start_idx, true_start_idx, calib, fs_dynamisch
+        df_imu,
+        q_init_wall,
+        process_start_idx,
+        true_start_idx,
+        calib,
+        fs_dynamisch,
+        apply_lateral_corridor=False
     )
     
     q_init_corrected = q_init_wall
@@ -466,7 +530,10 @@ def main():
             
             print(f"[INFO] Sync erfolgreich! Optimaler Zeitversatz (Offset): {optimal_offset:.3f} Sekunden")
             print(f"[INFO] Der Start (IMU-Peak) passiert exakt bei Video-Sekunde: {video_start_sec:.3f}s (Frame ~{video_start_frame})")
-            print(f"[INFO] Video-Offsets (Y={true_video_start_y:.3f}m, Z={true_video_start_z:.3f}m) werden am Ende addiert.")
+            print(
+                f"[INFO] Absolute Video-Startposition: "
+                f"Y={true_video_start_y:.3f}m, Z={true_video_start_z:.3f}m."
+            )
         except Exception as e:
             print(f"[WARNUNG] Videodaten-Sync fehlgeschlagen: {e}")
 
@@ -479,17 +546,33 @@ def main():
     
     config.USE_SMOOTHER = original_smoother
     config.USE_WALL_CONSTRAINT = original_wall_constraint
+
+    sensor_start_wall = np.asarray(
+        getattr(config, 'SENSOR_START_POSITION_WALL_M', [0.0, 0.0, 0.0]),
+        dtype=float
+    )
+    if sensor_start_wall.shape != (3,) or not np.all(np.isfinite(sensor_start_wall)):
+        raise ValueError(
+            "SENSOR_START_POSITION_WALL_M muss drei endliche Werte [X, Y, Z] enthalten."
+        )
     
     positions, velocities, orientations, times, eskf = run_eskf_pipeline(
-        df_imu, q_init_corrected, process_start_idx, true_start_idx, calib, fs_dynamisch
+        df_imu,
+        q_init_corrected,
+        process_start_idx,
+        true_start_idx,
+        calib,
+        fs_dynamisch,
+        wall_start_y=sensor_start_wall[1],
+        apply_lateral_corridor=True
     )
 
     # ==============================================================
     # 6. ABSOLUTER WELT-OFFSET & VISUALISIERUNG
     # ==============================================================
-    # JETZT schieben wir die fertige, saubere Trajektorie in die Weltkoordinaten
-    positions[:, 1] += true_video_start_y
-    positions[:, 2] += true_video_start_z
+    # Die Filtertrajektorie bleibt lokal. Nur eine separate Plot-Kopie wird mit
+    # der festen Sensorstartposition in absolute Wandkoordinaten verschoben.
+    positions_plot = positions + sensor_start_wall
 
     if len(times) > 1:
         print("\n" + "="*55)
@@ -500,15 +583,15 @@ def main():
     vis = TrajectoryVisualizer(config=config)
     
     if getattr(config, 'SHOW_3D_TRAJECTORY', True):
-        vis.plot_static_trajectory(positions)
+        vis.plot_static_trajectory(positions_plot)
     if getattr(config, 'SHOW_ANIMATED_TRAJECTORY', False):
-        vis.plot_animated_trajectory(positions, orientations, fs_dynamisch)
+        vis.plot_animated_trajectory(positions_plot, orientations, fs_dynamisch)
     if getattr(config, 'SHOW_2D_FRONT', True):
-        vis.plot_2d_wall_with_trajectory(positions, velocities) 
+        vis.plot_2d_wall_with_trajectory(positions_plot, velocities)
     if getattr(config, 'SHOW_2D_FRONT_VIDEO', True) and video_positions is not None:
-        vis.plot_2d_wall_with_trajectory(positions, velocities, video_positions)        
+        vis.plot_2d_wall_with_trajectory(positions_plot, velocities, video_positions)
     if getattr(config, 'SHOW_2D_SIDE', True):
-        vis.plot_2d_side_view_with_trajectory(positions, velocities)
+        vis.plot_2d_side_view_with_trajectory(positions_plot, velocities)
     if getattr(config, 'SHOW_VELOCITY', False):
         vis.plot_velocity(times, velocities)
     if getattr(config, 'SHOW_RAW_SENSOR_DATA', False):
@@ -518,7 +601,7 @@ def main():
     if getattr(config, 'SHOW_HIP_ROTATION', True):
         vis.plot_hip_rotation(times, orientations)
     if getattr(config, 'SHOW_2D_FRONT_YAW', True):
-        vis.plot_2d_wall_with_yaw(positions, orientations)
+        vis.plot_2d_wall_with_yaw(positions_plot, orientations)
 
     vis.show_all()
     
