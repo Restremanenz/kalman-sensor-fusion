@@ -39,8 +39,8 @@ USE_SMOOTHER = True            # Smoother ein-/ausschalten
 # Positions-Ziele am Ende des Laufs
 SMOOTH_TO_BARO_Z = False        # Z-Achse an die exakt letzte Barometer-Höhe angleichen
 SMOOTH_XY_TO_ZERO = True       # X/Y-Achsen exakt über den Startpunkt zwingen
-TARGET_X_M = -1.1               # (m) Ziel X (0.0 = exakt über Start)
-TARGET_Y_M = 0.4 - 0.9              # (m) Ziel Y (0.0 = exakt über Start)
+TARGET_X_M = 1.1                # (m) +X zeigt von der Wand weg
+TARGET_Y_M = -0.4               # (m) +Y zeigt nach rechts
 
 TARGET_XY_UNCERTAINTY = 0.1     # Mögliche Abweichung
 
@@ -51,18 +51,26 @@ FORCE_V_END_ZERO = False
 # ==========================================
 # DOMAIN KNOWLEDGE: VIRTUELLEN KORRIDOR & WAND VORGEBEN
 # ==========================================
-USE_YAW_CORRECTION = True   # True = 2-Pass PCA Korrektur, False = Original
+USE_YAW_CORRECTION = False   # True = 2-Pass PCA Korrektur, False = Original
+
+# Festes rechtshändiges Wandkoordinatensystem:
+# +X = von der Wand weg, -X = in die Wand
+# +Y = nach rechts,       -Y = nach links
+# +Z = nach oben
+WALL_FRAME_BASE_YAW_DEG = 180.0     # (Grad) Basis-Drehung des Wandkoordinatensystems
+
+# Korrektur der reproduzierbaren Hüftstellung beim Start.
+# Positiv = von oben gegen den Uhrzeigersinn, negativ = im Uhrzeigersinn.
+START_POSE_YAW_CORRECTION_DEG = 0.0
+
 USE_WALL_CONSTRAINT = False
 WALL_INCLINATION_DEG = 5.0    # (Grad) Überhang der genormten Speed-Wand
 
-# In welche Richtung (im initialen Sensor-Koordinatensystem) zeigt der Kletterer-Rücken von der Wand WEG?
-# Beispiele: 
-# [0.0, 1.0] -> Sensor-Y-Achse zeigt exakt vom Rücken weg.
-# [1.0, 0.0] -> Sensor-X-Achse zeigt exakt vom Rücken weg.
-# [1.0, 1.0] -> Sensor wurde um 45 Grad schief aufgeklebt.
-WALL_NORMAL_XY = [-1.0, 0.0]   
+# Normalenrichtung der Wand im oben definierten Wandkoordinatensystem.
+# zeigt von der Wand weg und ist deshalb exakt +X.
+WALL_NORMAL_XY = [1.0, 0.0]
 
-WALL_UNCERTAINTY = 0.8             # (m) Toleranz/Gummiband-Effekt (z.B. 30 cm)
+WALL_UNCERTAINTY = 0.8             # (m) Toleranz/Gummiband-Effekt 
 
 # ==========================================
 # KALMAN FILTER TUNING 
@@ -141,11 +149,8 @@ SHOW_2D_FRONT_YAW = False
 
 # Sensor-Offsets für die exakte Ausrichtung in den Plots
 VIS_SENSOR_START_Z = 1.1          # (m) Starthöhe des Sensors (Offset Z)
-VIS_SENSOR_OFFSET_Y = 0.8         # (m) Verschiebung auf der Breite (Offset Y)
-VIS_SENSOR_OFFSET_X = 0.5         # (m) Verschiebung zur Wand in der Seitenansicht (Offset X)
-VIS_MIRROR_Y = False               # Soll die Y-Achse gespiegelt werden? --> rechts entspricht dann +y
-VIS_MIRROR_X = True               # Soll die X-Achse gespiegelt werden? --> weck von der Wand entspricht dann +x
-
+VIS_SENSOR_OFFSET_Y = 0.8         # (m) Startposition nach rechts (+Y)
+VIS_SENSOR_OFFSET_X = 0.5         # (m) Startabstand von der Wand (+X)
 # Wand-Eigenschaften für die Visualisierung
 VIS_WALL_LENGTH = 15.0            # (m) Länge der Kletterwand
 VIS_WALL_THICKNESS = 0.10         # (m) Dicke der gezeichneten Wand im Plot

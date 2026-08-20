@@ -133,6 +133,19 @@ def compute_optimal_yaw_correction(positions, velocities, times, target_x, targe
     return res.x if res.success else 0.0
 
 
+def align_initial_orientation_to_wall(q_initial, base_yaw_deg, start_pose_yaw_deg=0.0):
+    """Richtet die Anfangsorientierung auf das feste Wandkoordinatensystem aus.
+
+    Das Wandkoordinatensystem ist rechtshändig definiert als:
+    +X von der Wand weg, +Y nach rechts und +Z nach oben.
+    Die Transformation wird vor ESKF und RTS angewendet, damit auch alle
+    Messbedingungen und Endpunktbedingungen dieselben Achsen verwenden.
+    """
+    total_yaw_deg = float(base_yaw_deg) + float(start_pose_yaw_deg)
+    wall_rotation = R.from_euler('z', total_yaw_deg, degrees=True)
+    return wall_rotation * q_initial, total_yaw_deg
+
+
 def run_eskf_pipeline(df_imu, q_init, process_start_idx, true_start_idx, calib, fs_dynamisch):
     mag_in_run_active = config.USE_MAGNETOMETER and config.USE_18_STATE_ESKF
     
@@ -347,6 +360,22 @@ def main():
         q_init = R.from_quat([0, 0, 0, 1])
 
     df_imu = preprocessor.process_barometer_and_crop(df_imu, P0, true_start_idx, fs_dynamisch)
+
+    # Die Ausrichtung erfolgt vor Scout-Pass, ESKF und RTS. Dadurch liegen auch
+    # Wandbedingung und RTS-Endpunkt von Beginn an im Wandkoordinatensystem.
+    base_yaw_deg = getattr(config, 'WALL_FRAME_BASE_YAW_DEG', 180.0)
+    start_pose_yaw_deg = getattr(config, 'START_POSE_YAW_CORRECTION_DEG', 0.0)
+    q_init_wall, total_wall_yaw_deg = align_initial_orientation_to_wall(
+        q_init,
+        base_yaw_deg,
+        start_pose_yaw_deg
+    )
+
+    print(
+        f" -> Wandkoordinatensystem: Basis={base_yaw_deg:+.2f}°, "
+        f"Startkorrektur={start_pose_yaw_deg:+.2f}°, "
+        f"Gesamt={total_wall_yaw_deg:+.2f}°"
+    )
     
     # Neue Spalten initialisieren
     df_imu['Video_Y'] = np.nan
@@ -370,10 +399,10 @@ def main():
     config.USE_WALL_CONSTRAINT = False
     
     positions_scout, velocities_scout, _, times_scout, _ = run_eskf_pipeline(
-        df_imu, q_init, process_start_idx, true_start_idx, calib, fs_dynamisch
+        df_imu, q_init_wall, process_start_idx, true_start_idx, calib, fs_dynamisch
     )
     
-    q_init_corrected = q_init
+    q_init_corrected = q_init_wall
     if getattr(config, 'USE_YAW_CORRECTION', True):
         target_x = getattr(config, 'TARGET_X_M', -1.2)
         target_y = getattr(config, 'TARGET_Y_M', -0.2)
@@ -382,7 +411,7 @@ def main():
             ignore_start_sec=0.5, alpha=1.0, beta=2.0
         )
         print(f" -> 🎯 Yaw-Optimierung abgeschlossen! Fehlstellung: {np.degrees(theta_opt):.2f}°")
-        q_init_corrected = R.from_rotvec([0, 0, theta_opt]) * q_init
+        q_init_corrected = R.from_rotvec([0, 0, theta_opt]) * q_init_wall
 
     # ==============================================================
     # 4. KINEMATISCHER SYNC (Advanced Signal Alignment)

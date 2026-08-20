@@ -34,9 +34,9 @@ class TrajectoryVisualizer:
         ax.plot(positions[:, 0], positions[:, 1], positions[:, 2], label='KF Trajektorie', color='b')
         ax.scatter(positions[0, 0], positions[0, 1], positions[0, 2], color='g', s=100, label='Start')
         ax.scatter(positions[-1, 0], positions[-1, 1], positions[-1, 2], color='r', s=100, label='Ende')
-        ax.set_xlabel('X [m]')
-        ax.set_ylabel('Y [m]')
-        ax.set_zlabel('Z [m]')
+        ax.set_xlabel('X: Wandabstand (+ außen) [m]')
+        ax.set_ylabel('Y: Wandbreite (+ rechts) [m]')
+        ax.set_zlabel('Z: Höhe (+ oben) [m]')
         ax.set_title('3D Trajektorie')
         ax.legend()
 
@@ -71,9 +71,9 @@ class TrajectoryVisualizer:
         ax.set_xlim([-limit, limit])
         ax.set_ylim([-limit, limit])
         ax.set_zlim([-limit, limit])
-        ax.set_xlabel('X [m]')
-        ax.set_ylabel('Y [m]')
-        ax.set_zlabel('Z [m]')
+        ax.set_xlabel('X: Wandabstand (+ außen) [m]')
+        ax.set_ylabel('Y: Wandbreite (+ rechts) [m]')
+        ax.set_zlabel('Z: Höhe (+ oben) [m]')
         ax.set_title('Animierte Kalman Trajektorie')
 
         def update(frame):
@@ -199,8 +199,6 @@ class TrajectoryVisualizer:
 
         if video_positions is not None:
             plot_video = video_positions.copy()
-            if getattr(self.config, 'VIS_MIRROR_Y', True):
-                plot_video[:, 1] = -plot_video[:, 1]
             
             # WICHTIG: Keine visuellen Offsets mehr addieren! 
             # Das Video hat in main.py bereits exakte Weltkoordinaten bekommen.
@@ -210,8 +208,6 @@ class TrajectoryVisualizer:
 
 # IMU-Trajektorie 
         plot_pos = positions.copy()
-        if getattr(self.config, 'VIS_MIRROR_Y', True):
-            plot_pos[:, 1] = -plot_pos[:, 1]
 
         # SMARTE OFFSETS (Rückwärtskompatibilität) ---
         # Prüfen, ob die Trajektorie bei 0,0,0 startete (Video war aus)
@@ -250,7 +246,7 @@ class TrajectoryVisualizer:
         ax.set_xlim([-1.8, 1.8])
         ax.set_ylim([-0.5, wall_length + 0.5])
         
-        ax.set_xlabel('Y-Achse (Breite) [m]')
+        ax.set_xlabel('Y: Wandbreite (+ rechts / - links) [m]')
         ax.set_ylabel('Z-Achse (Höhe) [m]')
         ax.set_title('2D Speedwand-Analyse (Frontalansicht)')
         
@@ -267,16 +263,9 @@ class TrajectoryVisualizer:
         
         plot_pos = positions.copy()
         
-        # Spiegelung und Wand-Richtung 
-        if getattr(self.config, 'VIS_MIRROR_X', True):
-            # Kletterer in den positiven Bereich (+X) spiegeln
-            plot_pos[:, 0] = -plot_pos[:, 0]
-            # Wand muss nach rechts (+X) überhängen, um über dem Kletterer zu sein
-            wall_direction = 1.0  
-        else:
-            # Originaldaten belassen (-X)
-            # Wand muss nach links (-X) überhängen
-            wall_direction = -1.0 
+        # Im Wandkoordinatensystem zeigt +X von der Wand weg. Der Überhang
+        # wird deshalb ohne nachträgliche Spiegelung in +X dargestellt.
+        wall_direction = 1.0
             
         # --- SMARTE OFFSETS (Rückwärtskompatibilität) ---
         start_is_zero = np.allclose(positions[0], np.zeros(3), atol=1e-3)
@@ -328,7 +317,7 @@ class TrajectoryVisualizer:
         ax.set_xlim([-2.5, 2.5])
         ax.set_ylim([-0.5, wall_length + 0.5])
         
-        ax.set_xlabel('X-Achse (Tiefe / Wandabstand) [m]')
+        ax.set_xlabel('X: Wandabstand (+ außen / - innen) [m]')
         ax.set_ylabel('Z-Achse (Höhe) [m]')
         ax.set_title('2D Speedwand-Analyse (Seitenansicht)')
         
@@ -395,8 +384,6 @@ class TrajectoryVisualizer:
 
         # Positionen kopieren und Offsets anwenden
         plot_pos = positions.copy()
-        if getattr(self.config, 'VIS_MIRROR_Y', True):
-            plot_pos[:, 1] = -plot_pos[:, 1]
         
         plot_pos[:, 1] += getattr(self.config, 'VIS_SENSOR_OFFSET_Y', 0.3)
         plot_pos[:, 2] += getattr(self.config, 'VIS_SENSOR_START_Z', 1.1)
@@ -432,7 +419,7 @@ class TrajectoryVisualizer:
         ax.set_xlim([-1.8, 1.8])
         ax.set_ylim([-0.5, wall_length + 0.5])
         
-        ax.set_xlabel('Y-Achse (Breite) [m]')
+        ax.set_xlabel('Y: Wandbreite (+ rechts / - links) [m]')
         ax.set_ylabel('Z-Achse (Höhe) [m]')
         ax.set_title('Rotation-Heatmap: Hüft-Eindrehung an der Wand')
         
