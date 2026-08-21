@@ -1,7 +1,7 @@
 # ==========================================
 # DATEI- UND PFADEINSTELLUNGEN
 # ==========================================
-LOG_FOLDER = "./Data/7sek"
+LOG_FOLDER = "./Data/20260702_09_22_58"
 IMU_CALIB_FILE = "sensor_params.json"
 
 # ==========================================
@@ -40,14 +40,108 @@ VALIDATION_RUN_TIMING = {
 # Wähle die Methode: 'STATIC', 'MADGWICK' oder 'ESKF'
 ALIGNMENT_METHOD = 'ESKF'    
 
-# Basis-Parameter (Werden von allen Methoden genutzt, um den Gyro-Bias am Start zu finden)
-STILLNESS_THRESHOLD = 4      # (dps) Unterhalb dieser Drehrate gilt der Sensor als ruhend
-MIN_STILL_SECONDS = 0.6        # (s) So lange muss der Sensor für den initialen Gyro-Bias ruhen
+# Adaptive Mehrfenster-Erkennung der besten quasi-statischen Vorstartphase.
+# Es wird keine feste Ruhedauer mehr erzwungen. Stattdessen untersucht das
+# Programm alle Fensterlängen zwischen Minimum und Maximum und wählt das
+# längste Fenster, das die laufabhängig bestimmten Qualitätsgrenzen erfüllt.
+INIT_MIN_WINDOW_SECONDS = 0.20
+INIT_MAX_WINDOW_SECONDS = 2.00
+INIT_WINDOW_STEP_SECONDS = 0.05
+INIT_DURATION_STEP_SECONDS = 0.05
+# None durchsucht die gesamte Aufzeichnung vor dem erkannten Start. Dadurch
+# werden auch frühe, tatsächlich ruhige Phasen nicht mehr verworfen.
+INIT_SEARCH_LOOKBACK_SECONDS = None
+INIT_START_BUFFER_SECONDS = 0.20
+INIT_PREFERRED_WINDOW_SECONDS = 0.60
+INIT_MAX_PHASE_CANDIDATES = 12
 
-# Spezifische Parameter für dynamische Starts (MADGWICK und ESKF)
-START_PEAK_THRESHOLD_G = 2   # (g) Ab dieser Beschleunigung gilt der Athlet als gestartet
-WARMUP_WINDOW_SEC = 4.0        # (s) Dauer der Einschwingphase VOR dem Start
-WARMUP_BUFFER_SEC = 0.2        # (s) Sicherheitsabstand vom Start-Peak zurück
+# Adaptive Grenzen werden aus dem unteren Rausch-Perzentil jedes Laufs
+# abgeleitet, bleiben aber zwischen einer Unter- und Obergrenze beschränkt.
+INIT_NOISE_PERCENTILE = 10.0
+INIT_ADAPTIVE_THRESHOLD_FACTOR = 2.5
+
+INIT_ACC_NORM_TOL_MIN_G = 0.015
+INIT_ACC_NORM_TOL_MAX_G = 0.08
+INIT_ACC_STD_MIN_G = 0.008
+INIT_ACC_STD_MAX_G = 0.03
+INIT_ACC_DIR_P90_MIN_DEG = 0.50
+INIT_ACC_DIR_P90_MAX_DEG = 2.00
+INIT_GYRO_STD_MIN_DPS = 0.50
+INIT_GYRO_STD_MAX_DPS = 4.50
+
+# Eine kleine Standardabweichung allein genügt nicht: Auch eine gleichmäßige
+# Drehung kann eine kleine Streuung besitzen. Deshalb gelten zusätzlich harte
+# Grenzen für Betrag und 95-%-Quantil der korrigierten Drehrate.
+INIT_GYRO_MEAN_MAX_DPS = 3.0
+INIT_GYRO_P95_MAX_DPS = 4.0
+
+# Adaptive Orientierungsfortschreibung von jeder Ruhephase bis zum Start.
+# Beschleunigung wird nur weich als Gravity-Beobachtung verwendet, wenn Betrag
+# und Drehrate eine quasi-statische Situation unterstützen.
+INIT_WARMUP_ACC_NORM_GATE_G = 0.10
+INIT_WARMUP_GYRO_GATE_DPS = 15.0
+INIT_WARMUP_GRAVITY_GAIN = 0.015
+
+# Der laufbezogene Gyro-Bias wird nur bei einer deutlich strengeren,
+# ausreichend langen echten Ruhephase aktualisiert. Andernfalls bleibt die
+# unabhängige Sensorkalibrierung aus sensor_params.json erhalten.
+INIT_GYRO_BIAS_MIN_WINDOW_SECONDS = 0.50
+INIT_GYRO_BIAS_MAX_MEAN_DPS = 1.00
+INIT_GYRO_BIAS_MAX_STD_DPS = 1.50
+
+# Beschränkte Startorientierungsoptimierung im Wandkoordinatensystem.
+# Es werden ausschließlich Roll und Pitch variiert; die Yaw-Ausrichtung bleibt
+# vollständig unter Kontrolle von WALL_FRAME_BASE_YAW_DEG und
+# START_POSE_YAW_CORRECTION_DEG.
+USE_INITIAL_ATTITUDE_OPTIMIZATION = True
+USE_INITIAL_ATTITUDE_FINE_TUNING = False
+EXPORT_INITIALIZATION_CANDIDATE_RUNS = True
+
+# Historisch äquivalenter Warm-up-Kandidat zur Ablationsanalyse und als
+# konfigurierbare praktische Startlagenquelle.
+INCLUDE_LEGACY_WARMUP_REFERENCE = True
+INITIAL_ATTITUDE_SOURCE = "STABILIZED_RECENT_WARMUP"
+LEGACY_WARMUP_WINDOW_SECONDS = 4.0
+LEGACY_WARMUP_BUFFER_SECONDS = 0.2
+LEGACY_WARMUP_LEVELING_SECONDS = 0.5
+
+# Beim erkannten Bewegungsstart wird ein lokales Trajektorienkoordinatensystem
+# definiert. Die Lage- und Bias-Kovarianzen aus dem Warm-up bleiben erhalten;
+# nur Position und Geschwindigkeit erhalten diese neuen Startunsicherheiten.
+START_POSITION_STD_M = 0.001
+START_VELOCITY_STD_MPS = 0.05
+
+INITIAL_ROLL_SEARCH_MIN_DEG = -5.0
+INITIAL_ROLL_SEARCH_MAX_DEG = 5.0
+INITIAL_PITCH_SEARCH_MIN_DEG = -5.0
+INITIAL_PITCH_SEARCH_MAX_DEG = 5.0
+INITIAL_ATTITUDE_COARSE_STEP_DEG = 2.5
+INITIAL_ATTITUDE_FINE_STEP_DEG = 0.5
+INITIAL_ATTITUDE_FINE_RADIUS_DEG = 0.5
+INITIAL_ATTITUDE_PRIOR_STD_DEG = 2.0
+INITIAL_ATTITUDE_MIN_RELATIVE_IMPROVEMENT = 0.05
+INITIAL_ATTITUDE_REJECT_BOUNDARY_SOLUTION = True
+
+# Unsicherheiten und Gewichte der video-unabhängigen Kostenfunktion. Die
+# laterale Form ist bewusst weich gewichtet, damit reale Seitwärtsbewegungen
+# des Athleten nicht vollständig entfernt werden.
+INITIAL_OPT_TARGET_X_STD_M = 0.50
+INITIAL_OPT_TARGET_Y_STD_M = 0.30
+INITIAL_OPT_LATERAL_SHAPE_STD_M = 0.75
+INITIAL_OPT_BARO_STD_M = 0.30
+INITIAL_OPT_ACCEL_BIAS_STD_MPS2 = 1.00
+INITIAL_OPT_GYRO_BIAS_STD_RADPS = 0.20
+
+INITIAL_OPT_BARO_WEIGHT = 1.0
+INITIAL_OPT_WALL_WEIGHT = 0.5
+INITIAL_OPT_CORRIDOR_WEIGHT = 0.5
+INITIAL_OPT_ENDPOINT_WEIGHT = 0.1
+INITIAL_OPT_LATERAL_SHAPE_WEIGHT = 0.5
+INITIAL_OPT_ATTITUDE_PRIOR_WEIGHT = 1.0
+INITIAL_OPT_BIAS_WEIGHT = 0.25
+
+# Spezifischer Parameter zur Erkennung des eigentlichen Bewegungsstarts.
+START_PEAK_THRESHOLD_G = 2.0  # (g) Ab dieser Beschleunigung gilt der Athlet als gestartet
 
 # ==============================================================
 # END-DETECTION (Ziel-Erkennung)
@@ -123,6 +217,7 @@ GYRO_BIAS_RW_DENSITY = [3.937686e-06, 6.420872e-06, 9.472721e-06]
 # ==========================================
 # ROBUSTE STILLSTANDSERKENNUNG (ZUPT)
 # ==========================================
+ZARU_GYRO_THRESHOLD_DPS = 4.0  # Separater Grenzwert für In-Run-ZUPT/ZARU
 OFFLINE_ZUPT_THRESHOLD = 0.05   # (g) Schwellenwert für gefilterte Beschleunigung
 OFFLINE_ZUPT_HP_CUTOFF = 0.01  # (Hz) Hochpass-Filter (entfernt 1g Schwerkraft)
 OFFLINE_ZUPT_LP_CUTOFF = 5.0   # (Hz) Tiefpass-Filter (glättet Sensorrauschen)
@@ -146,7 +241,7 @@ MAG_BIAS_RW = 1e-3             # Random Walk für Mag-Bias
 # VIDEO ANALYSE INTEGRATION
 # ==========================================
 # Video einlesen, zeitlich synchronisieren und für Vergleichsplots bereitstellen.
-USE_VIDEO_DATA = True
+USE_VIDEO_DATA = False
 
 # True: Video-Y/Z als Positionsmessung in den ESKF einspeisen.
 # False: Video bleibt eine unabhängige Referenz und wird nur geplottet.

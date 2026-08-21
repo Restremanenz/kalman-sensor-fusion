@@ -149,6 +149,69 @@ def align_initial_orientation_to_wall(q_initial, base_yaw_deg, start_pose_yaw_de
     return wall_rotation * q_initial, total_yaw_deg
 
 
+def rotate_initial_covariance(initial_covariance, world_rotation):
+    """Dreht globale ESKF-Fehlerzustände in einen neuen Weltframe."""
+    if initial_covariance is None:
+        return None
+
+    covariance = np.asarray(initial_covariance, dtype=float)
+    if covariance.ndim != 2 or covariance.shape[0] != covariance.shape[1]:
+        raise ValueError(
+            "Die Startkovarianz muss eine quadratische Matrix sein."
+        )
+    if covariance.shape[0] < 9:
+        raise ValueError(
+            "Die Startkovarianz enthält keine vollständigen ESKF-Zustände."
+        )
+
+    transform = np.eye(covariance.shape[0])
+    rotation_matrix = world_rotation.as_matrix()
+
+    # Position, Geschwindigkeit und der links-multiplikative
+    # Orientierungsfehler sind im globalen Koordinatensystem definiert.
+    transform[0:3, 0:3] = rotation_matrix
+    transform[3:6, 3:6] = rotation_matrix
+    transform[6:9, 6:9] = rotation_matrix
+
+    rotated = transform @ covariance @ transform.T
+    return 0.5 * (rotated + rotated.T)
+
+
+def apply_initial_covariance(eskf, initial_covariance):
+    """Überträgt eine 15- oder 18-State-Kovarianz auf den ESKF."""
+    if initial_covariance is None:
+        return
+
+    source = np.asarray(initial_covariance, dtype=float)
+    if source.shape == (eskf.dim_x, eskf.dim_x):
+        covariance = source.copy()
+    elif source.shape == (15, 15) and eskf.dim_x == 18:
+        covariance = eskf.kf.P.copy()
+        covariance[:15, :15] = source
+    else:
+        raise ValueError(
+            f"Startkovarianz {source.shape} passt nicht zum "
+            f"{eskf.dim_x}-State-ESKF."
+        )
+
+    if not np.all(np.isfinite(covariance)):
+        raise ValueError("Die Startkovarianz enthält ungültige Werte.")
+
+    covariance = 0.5 * (covariance + covariance.T)
+    minimum_eigenvalue = float(np.min(np.linalg.eigvalsh(covariance)))
+    if minimum_eigenvalue < -1e-8:
+        raise ValueError(
+            "Die Warm-up-Kovarianz ist nicht positiv semidefinit."
+        )
+    if minimum_eigenvalue < 0.0:
+        covariance += np.eye(eskf.dim_x) * (
+            -minimum_eigenvalue + 1e-12
+        )
+
+    eskf.kf.P = covariance
+    eskf.kf.x = np.zeros(eskf.dim_x)
+
+
 def run_eskf_pipeline(
         df_imu,
         q_init,
@@ -157,7 +220,10 @@ def run_eskf_pipeline(
         calib,
         fs_dynamisch,
         options,
-        wall_start_y=0.0
+        wall_start_y=0.0,
+        initial_accel_bias_mps2=None,
+        initial_gyro_bias_radps=None,
+        initial_covariance=None,
 ):
     mag_in_run_active = config.USE_MAGNETOMETER and config.USE_18_STATE_ESKF
     
@@ -176,6 +242,17 @@ def run_eskf_pipeline(
         mag_rw_density = config.MAG_BIAS_RW,
         mag_unc = config.MAG_UNCERTAINTY
     )
+    if initial_accel_bias_mps2 is not None:
+        eskf.ba = np.asarray(
+            initial_accel_bias_mps2,
+            dtype=float,
+        ).copy()
+    if initial_gyro_bias_radps is not None:
+        eskf.bg = np.asarray(
+            initial_gyro_bias_radps,
+            dtype=float,
+        ).copy()
+    apply_initial_covariance(eskf, initial_covariance)
     
     smoother = ESKFSmoother(use_18_state=mag_in_run_active)
     smoother_started = False
@@ -239,21 +316,56 @@ def run_eskf_pipeline(
         gyro_calib = calib.calibrate_gyro(raw_gyro)
         mag_calib = calib.calibrate_mag(raw_mag)
 
-        # WARM-UP PHASE
+        # VORSTARTPROPAGATION
+        # Die Orientierung wird ab dem ausgewählten Gravity-Fenster bis zum
+        # Bewegungsstart ausschließlich mit dem kalibrierten Gyroskop
+        # fortgeschrieben. Position und Geschwindigkeit werden am Start ohnehin
+        # zurückgesetzt. Unbedingte Gravity-/ZARU-/ZUPT-Updates würden echte
+        # Vorstartbewegungen fälschlich als Sensorfehler interpretieren.
         if i < true_start_idx:
             eskf.predict(acc_calib, gyro_calib, dt)
-            eskf.update_zupt()             
-            eskf.update_zaru(gyro_calib)   
-            eskf.update_gravity(acc_calib)
             if pd.notna(current_baro_time): last_baro_time = current_baro_time
             if pd.notna(current_mag_time): last_mag_time = current_mag_time
             continue 
 
-        # "CLEAN SLATE" RESET (Lokal bei 0,0,0)
+        # Lokaler Trajektorienstart bei [0, 0, 0].
         elif i == true_start_idx:
             eskf.p = np.zeros(3)
             eskf.v = np.zeros(3)
-            eskf.kf.P[0:6, 0:6] = 1e-6 
+            eskf.kf.x = np.zeros(eskf.dim_x)
+
+            position_variance = float(getattr(
+                config,
+                'START_POSITION_STD_M',
+                0.001,
+            )) ** 2
+            velocity_variance = float(getattr(
+                config,
+                'START_VELOCITY_STD_MPS',
+                0.05,
+            )) ** 2
+            if position_variance <= 0.0 or velocity_variance <= 0.0:
+                raise ValueError(
+                    "Die Startunsicherheiten müssen größer als null sein."
+                )
+
+            start_covariance = eskf.kf.P.copy()
+
+            # Position und Geschwindigkeit definieren am Start ein neues
+            # lokales Koordinatensystem. Nur ihre Zustände und Kopplungen
+            # werden zurückgesetzt. Die im Warm-up bestimmten Lage- und
+            # Bias-Kovarianzen samt ihrer gegenseitigen Kopplungen bleiben.
+            start_covariance[0:6, :] = 0.0
+            start_covariance[:, 0:6] = 0.0
+            start_covariance[0:3, 0:3] = (
+                np.eye(3) * position_variance
+            )
+            start_covariance[3:6, 3:6] = (
+                np.eye(3) * velocity_variance
+            )
+            eskf.kf.P = 0.5 * (
+                start_covariance + start_covariance.T
+            )
 
             smoother.save_initial_state(
                 eskf.p, eskf.v, eskf.q, eskf.ba, eskf.bg, 
@@ -305,7 +417,10 @@ def run_eskf_pipeline(
             acc_world = eskf.q.apply(acc_calib)
             acc_magnitude = np.linalg.norm(acc_world + eskf.g)
             gyro_magnitude = np.linalg.norm(gyro_calib)
-            zaru_threshold_rads = getattr(config, 'STILLNESS_THRESHOLD', 3.0) * (np.pi / 180.0)
+            zaru_threshold_rads = (
+                getattr(config, 'ZARU_GYRO_THRESHOLD_DPS', 4.0)
+                * (np.pi / 180.0)
+            )
             
             if row['Stationary'] == True and gyro_magnitude < zaru_threshold_rads and acc_magnitude < 0.4:
                 eskf.update_zupt()             
@@ -389,10 +504,593 @@ def run_eskf_pipeline(
     return positions, velocities, orientations, np.array(times_plot), eskf
 
 
+def _initial_attitude_cost(
+        positions,
+        times,
+        eskf,
+        df_imu,
+        roll_correction_deg,
+        pitch_correction_deg,
+        wall_start_y,
+):
+    """Bewertet eine Startorientierung ohne Verwendung der Videoreferenz."""
+    if len(positions) < 2 or len(times) != len(positions):
+        return np.inf, {'invalid': True}
+
+    baro_reference = np.interp(
+        times,
+        df_imu['Time'].to_numpy(dtype=float),
+        df_imu['Altitude_filt [m]'].to_numpy(dtype=float),
+    )
+    baro_std = max(float(config.INITIAL_OPT_BARO_STD_M), 1e-6)
+    baro_cost = float(np.mean(
+        ((positions[:, 2] - baro_reference) / baro_std) ** 2
+    ))
+
+    wall_normal = np.asarray(config.WALL_NORMAL_XY, dtype=float)
+    wall_normal_norm = np.linalg.norm(wall_normal)
+    if wall_normal_norm <= 1e-9:
+        raise ValueError("WALL_NORMAL_XY darf kein Nullvektor sein.")
+    wall_normal /= wall_normal_norm
+    wall_residual = (
+        positions[:, :2] @ wall_normal
+        - positions[:, 2] * np.tan(np.radians(config.WALL_INCLINATION_DEG))
+    )
+    wall_std = max(float(config.WALL_UNCERTAINTY), 1e-6)
+    wall_cost = float(np.mean((wall_residual / wall_std) ** 2))
+
+    corridor_y_min = float(config.CORRIDOR_Y_MIN_M) - float(wall_start_y)
+    corridor_y_max = float(config.CORRIDOR_Y_MAX_M) - float(wall_start_y)
+    y_local = positions[:, 1]
+    corridor_excess = np.where(
+        y_local < corridor_y_min,
+        corridor_y_min - y_local,
+        np.where(y_local > corridor_y_max, y_local - corridor_y_max, 0.0),
+    )
+    corridor_std = max(float(config.CORRIDOR_UNCERTAINTY), 1e-6)
+    corridor_cost = float(np.mean((corridor_excess / corridor_std) ** 2))
+
+    target_x = float(config.TARGET_X_M)
+    target_y = float(config.TARGET_Y_M)
+    target_x_std = max(float(config.INITIAL_OPT_TARGET_X_STD_M), 1e-6)
+    target_y_std = max(float(config.INITIAL_OPT_TARGET_Y_STD_M), 1e-6)
+    endpoint_cost = float(
+        ((positions[-1, 0] - target_x) / target_x_std) ** 2
+        + ((positions[-1, 1] - target_y) / target_y_std) ** 2
+    )
+
+    z_peak = max(float(np.max(positions[:, 2])), 1e-6)
+    z_progress = np.clip(positions[:, 2] / z_peak, 0.0, 1.0)
+    expected_y = target_y * z_progress
+    lateral_shape_std = max(
+        float(config.INITIAL_OPT_LATERAL_SHAPE_STD_M),
+        1e-6,
+    )
+    lateral_shape_cost = float(np.mean(
+        ((positions[:, 1] - expected_y) / lateral_shape_std) ** 2
+    ))
+
+    attitude_prior_std = max(
+        float(config.INITIAL_ATTITUDE_PRIOR_STD_DEG),
+        1e-6,
+    )
+    attitude_prior_cost = float(
+        (roll_correction_deg / attitude_prior_std) ** 2
+        + (pitch_correction_deg / attitude_prior_std) ** 2
+    )
+
+    accel_bias_std = max(
+        float(config.INITIAL_OPT_ACCEL_BIAS_STD_MPS2),
+        1e-6,
+    )
+    gyro_bias_std = max(
+        float(config.INITIAL_OPT_GYRO_BIAS_STD_RADPS),
+        1e-6,
+    )
+    bias_cost = float(
+        np.sum((eskf.ba / accel_bias_std) ** 2)
+        + np.sum((eskf.bg / gyro_bias_std) ** 2)
+    )
+
+    components = {
+        'barometer': baro_cost,
+        'wall': wall_cost,
+        'corridor': corridor_cost,
+        'endpoint': endpoint_cost,
+        'lateral_shape': lateral_shape_cost,
+        'attitude_prior': attitude_prior_cost,
+        'bias': bias_cost,
+    }
+    # Die geometrischen Rohkosten können bei einer durch Gravity-Leakage stark
+    # driftenden Trajektorie sehr groß werden. log1p erhält ihre Rangfolge,
+    # verhindert aber, dass eine einzelne unsichere Annahme (insbesondere der
+    # geschätzte Endpunkt) die gesamte Optimierung dominiert. Der Winkel-Prior
+    # bleibt quadratisch: Große nachträgliche Korrekturen sind damit nur bei
+    # klarer Evidenz zulässig.
+    total_cost = float(
+        config.INITIAL_OPT_BARO_WEIGHT * np.log1p(baro_cost)
+        + config.INITIAL_OPT_WALL_WEIGHT * np.log1p(wall_cost)
+        + config.INITIAL_OPT_CORRIDOR_WEIGHT * np.log1p(corridor_cost)
+        + config.INITIAL_OPT_ENDPOINT_WEIGHT * np.log1p(endpoint_cost)
+        + config.INITIAL_OPT_LATERAL_SHAPE_WEIGHT
+        * np.log1p(lateral_shape_cost)
+        + config.INITIAL_OPT_ATTITUDE_PRIOR_WEIGHT * attitude_prior_cost
+        + config.INITIAL_OPT_BIAS_WEIGHT * np.log1p(bias_cost)
+    )
+    if not np.isfinite(total_cost):
+        return np.inf, components
+    return total_cost, components
+
+
+def optimize_initial_attitude(
+        df_imu,
+        candidate_alignments,
+        true_start_idx,
+        calib,
+        fs_dynamisch,
+        sync_reference_options,
+        base_yaw_deg,
+        start_pose_yaw_deg,
+        wall_start_y,
+        fixed_solution=None,
+):
+    """Wählt Fenster sowie kleine Roll-/Pitch-Korrektur deterministisch aus."""
+    if not candidate_alignments:
+        raise ValueError("Keine Startorientierungskandidaten vorhanden.")
+
+    candidate_by_id = {
+        candidate['candidate_id']: candidate
+        for candidate in candidate_alignments
+    }
+    evaluation_cache = {}
+
+    def evaluate(candidate, roll_deg, pitch_deg):
+        key = (
+            candidate['candidate_id'],
+            round(float(roll_deg), 6),
+            round(float(pitch_deg), 6),
+        )
+        if key in evaluation_cache:
+            return evaluation_cache[key]
+
+        q_wall, total_wall_yaw_deg = align_initial_orientation_to_wall(
+            candidate['q_initial'],
+            base_yaw_deg,
+            start_pose_yaw_deg,
+        )
+        tilt_correction = R.from_euler(
+            'xy',
+            [float(roll_deg), float(pitch_deg)],
+            degrees=True,
+        )
+        q_test = tilt_correction * q_wall
+        wall_rotation = R.from_euler(
+            'z',
+            total_wall_yaw_deg,
+            degrees=True,
+        )
+        complete_frame_rotation = tilt_correction * wall_rotation
+        initial_covariance_wall = rotate_initial_covariance(
+            candidate.get('initial_covariance'),
+            complete_frame_rotation,
+        )
+        positions, velocities, orientations, times, eskf = run_eskf_pipeline(
+            df_imu,
+            q_test,
+            candidate['process_start_idx'],
+            true_start_idx,
+            calib,
+            fs_dynamisch,
+            options=sync_reference_options,
+            wall_start_y=wall_start_y,
+            initial_accel_bias_mps2=candidate.get(
+                'initial_accel_bias_mps2'
+            ),
+            initial_gyro_bias_radps=candidate.get(
+                'initial_gyro_bias_radps'
+            ),
+            initial_covariance=initial_covariance_wall,
+        )
+        total_cost, components = _initial_attitude_cost(
+            positions,
+            times,
+            eskf,
+            df_imu,
+            float(roll_deg),
+            float(pitch_deg),
+            wall_start_y,
+        )
+        result = {
+            'candidate_id': candidate['candidate_id'],
+            'roles': list(candidate['roles']),
+            'roll_correction_deg': float(roll_deg),
+            'pitch_correction_deg': float(pitch_deg),
+            'total_cost': total_cost,
+            'cost_components': components,
+            'q_initial_wall': q_test,
+            'process_start_idx': int(candidate['process_start_idx']),
+            'initial_accel_bias_mps2': np.asarray(candidate.get(
+                'initial_accel_bias_mps2',
+                np.zeros(3),
+            ), dtype=float),
+            'initial_gyro_bias_radps': np.asarray(candidate.get(
+                'initial_gyro_bias_radps',
+                np.zeros(3),
+            ), dtype=float),
+            'initial_covariance': (
+                None
+                if initial_covariance_wall is None
+                else initial_covariance_wall.copy()
+            ),
+            'positions': positions,
+            'velocities': velocities,
+            'orientations': orientations,
+            'times': times,
+        }
+        evaluation_cache[key] = result
+        return result
+
+    if fixed_solution is not None:
+        candidate_id = fixed_solution['candidate_id']
+        if candidate_id not in candidate_by_id:
+            raise ValueError(
+                f"Fixierter Initialisierungskandidat {candidate_id!r} "
+                "ist im aktuellen Lauf nicht verfügbar."
+            )
+        selected = evaluate(
+            candidate_by_id[candidate_id],
+            fixed_solution['roll_correction_deg'],
+            fixed_solution['pitch_correction_deg'],
+        )
+        # In den folgenden Validierungsvarianten steht die Entscheidung bereits
+        # fest. Erneute Vergleichsläufe aller Fenster wären redundant und
+        # könnten die gemeinsame Initialisierung nicht mehr verändern.
+        baseline_evaluations = [selected]
+        adaptive_baseline = selected
+        selection_source = 'fixed_validation_solution'
+    else:
+        baseline_evaluations = [
+            evaluate(candidate, 0.0, 0.0)
+            for candidate in candidate_alignments
+        ]
+        adaptive_baseline = next(
+            (
+                result
+                for result in baseline_evaluations
+                if 'longest_valid' in result['roles']
+            ),
+            baseline_evaluations[0],
+        )
+        # Die Kandidatenwahl verwendet ausschließlich Vorstartdaten. Kosten der
+        # späteren Klettertrajektorie werden nur diagnostisch gespeichert.
+        candidate = min(
+            candidate_alignments,
+            key=lambda item: (
+                item['candidate_id'] != str(getattr(
+                    config,
+                    'INITIAL_ATTITUDE_SOURCE',
+                    'STABILIZED_RECENT_WARMUP',
+                )),
+                item.get('selection_priority', 1),
+                item['selection_score'],
+                item['quality_score'],
+                item['gyro_p95_dps'],
+                -item['duration_s'],
+            ),
+        )
+        quality_baseline = evaluate(candidate, 0.0, 0.0)
+
+        if not bool(getattr(
+            config,
+            'USE_INITIAL_ATTITUDE_FINE_TUNING',
+            False,
+        )):
+            selected = quality_baseline
+            adaptive_baseline = selected
+            candidate_diagnostics = []
+            for result in baseline_evaluations:
+                source = candidate_by_id[result['candidate_id']]
+                candidate_diagnostics.append({
+                    'candidate_id': result['candidate_id'],
+                    'roles': list(result['roles']),
+                    'selected': (
+                        result['candidate_id'] == selected['candidate_id']
+                    ),
+                    'duration_s': float(source['duration_s']),
+                    'quality_score': float(source['quality_score']),
+                    'gyro_mean_dps': float(source['gyro_mean_dps']),
+                    'gyro_p95_dps': float(source['gyro_p95_dps']),
+                    'prestart_score': float(source['prestart_score']),
+                    'short_window_penalty': float(
+                        source['short_window_penalty']
+                    ),
+                    'selection_score': float(source['selection_score']),
+                    'warmup_report': dict(source['warmup_report']),
+                    'trajectory_cost': float(result['total_cost']),
+                    'cost_components': dict(result['cost_components']),
+                    'endpoint_local_m': result['positions'][-1].tolist(),
+                    'maximum_abs_lateral_m': float(np.max(np.abs(
+                        result['positions'][:, 1]
+                    ))),
+                })
+            report = {
+                'enabled': True,
+                'selection_source': 'configured_initial_attitude_source',
+                'accepted': True,
+                'rejection_reasons': [],
+                'candidate_id': selected['candidate_id'],
+                'candidate_roles': list(selected['roles']),
+                'roll_correction_deg': 0.0,
+                'pitch_correction_deg': 0.0,
+                'total_cost': selected['total_cost'],
+                'cost_components': dict(selected['cost_components']),
+                'adaptive_baseline_candidate_id': selected['candidate_id'],
+                'adaptive_baseline_cost': selected['total_cost'],
+                'selected_cost_improvement': 0.0,
+                'quality_baseline_candidate_id': selected['candidate_id'],
+                'quality_baseline_cost': selected['total_cost'],
+                'proposed_candidate_id': selected['candidate_id'],
+                'proposed_roll_correction_deg': 0.0,
+                'proposed_pitch_correction_deg': 0.0,
+                'proposed_cost': selected['total_cost'],
+                'proposed_relative_improvement': 0.0,
+                'proposed_roll_at_search_boundary': False,
+                'proposed_pitch_at_search_boundary': False,
+                'roll_at_search_boundary': False,
+                'pitch_at_search_boundary': False,
+                'evaluation_count': int(len(evaluation_cache)),
+                'uses_video_reference': False,
+                'candidate_selection_method': (
+                    'configured_source_then_prestart_consistency'
+                ),
+                'candidate_baselines': candidate_diagnostics,
+            }
+            solution = {
+                'candidate_id': selected['candidate_id'],
+                'roll_correction_deg': 0.0,
+                'pitch_correction_deg': 0.0,
+            }
+            return selected, adaptive_baseline, report, solution
+
+        roll_min = float(config.INITIAL_ROLL_SEARCH_MIN_DEG)
+        roll_max = float(config.INITIAL_ROLL_SEARCH_MAX_DEG)
+        pitch_min = float(config.INITIAL_PITCH_SEARCH_MIN_DEG)
+        pitch_max = float(config.INITIAL_PITCH_SEARCH_MAX_DEG)
+        coarse_step = float(config.INITIAL_ATTITUDE_COARSE_STEP_DEG)
+        fine_step = float(config.INITIAL_ATTITUDE_FINE_STEP_DEG)
+        fine_radius = float(config.INITIAL_ATTITUDE_FINE_RADIUS_DEG)
+        if coarse_step <= 0.0 or fine_step <= 0.0 or fine_radius < 0.0:
+            raise ValueError(
+                "Schrittweiten der Startorientierungsoptimierung sind ungültig."
+            )
+
+        roll_values = np.arange(
+            roll_min,
+            roll_max + 0.5 * coarse_step,
+            coarse_step,
+        )
+        pitch_values = np.arange(
+            pitch_min,
+            pitch_max + 0.5 * coarse_step,
+            coarse_step,
+        )
+        # Deterministische Koordinatensuche: Roll beeinflusst primär die Y-Z-
+        # Ebene und wird deshalb zuerst bewertet. Anschließend wird Pitch bei
+        # festem bestem Roll optimiert. Das benötigt wesentlich weniger volle
+        # ESKF-Durchläufe als ein kartesisches 2D-Raster.
+        coarse_roll_results = [
+            evaluate(candidate, roll_deg, 0.0)
+            for roll_deg in roll_values
+        ]
+        coarse_roll_best = min(
+            coarse_roll_results,
+            key=lambda result: result['total_cost'],
+        )
+        coarse_pitch_results = [
+            evaluate(
+                candidate,
+                coarse_roll_best['roll_correction_deg'],
+                pitch_deg,
+            )
+            for pitch_deg in pitch_values
+        ]
+        coarse_best = min(
+            coarse_pitch_results,
+            key=lambda result: result['total_cost'],
+        )
+
+        fine_roll_values = np.arange(
+            max(roll_min, coarse_best['roll_correction_deg'] - fine_radius),
+            min(roll_max, coarse_best['roll_correction_deg'] + fine_radius)
+            + 0.5 * fine_step,
+            fine_step,
+        )
+        fine_roll_results = [
+            evaluate(
+                candidate,
+                roll_deg,
+                coarse_best['pitch_correction_deg'],
+            )
+            for roll_deg in fine_roll_values
+        ]
+        fine_roll_best = min(
+            fine_roll_results,
+            key=lambda result: result['total_cost'],
+        )
+        fine_pitch_values = np.arange(
+            max(
+                pitch_min,
+                fine_roll_best['pitch_correction_deg'] - fine_radius,
+            ),
+            min(
+                pitch_max,
+                fine_roll_best['pitch_correction_deg'] + fine_radius,
+            ) + 0.5 * fine_step,
+            fine_step,
+        )
+        fine_pitch_results = [
+            evaluate(
+                candidate,
+                fine_roll_best['roll_correction_deg'],
+                pitch_deg,
+            )
+            for pitch_deg in fine_pitch_values
+        ]
+        proposed = min(
+            coarse_roll_results
+            + coarse_pitch_results
+            + fine_roll_results
+            + fine_pitch_results,
+            key=lambda result: result['total_cost'],
+        )
+        proposed_roll_at_boundary = bool(
+            np.isclose(proposed['roll_correction_deg'], roll_min)
+            or np.isclose(proposed['roll_correction_deg'], roll_max)
+        )
+        proposed_pitch_at_boundary = bool(
+            np.isclose(proposed['pitch_correction_deg'], pitch_min)
+            or np.isclose(proposed['pitch_correction_deg'], pitch_max)
+        )
+        baseline_cost = float(quality_baseline['total_cost'])
+        relative_improvement = (
+            (baseline_cost - float(proposed['total_cost']))
+            / max(abs(baseline_cost), 1e-9)
+        )
+        minimum_improvement = float(getattr(
+            config,
+            'INITIAL_ATTITUDE_MIN_RELATIVE_IMPROVEMENT',
+            0.05,
+        ))
+        reject_boundary = bool(getattr(
+            config,
+            'INITIAL_ATTITUDE_REJECT_BOUNDARY_SOLUTION',
+            True,
+        ))
+
+        rejection_reasons = []
+        if reject_boundary and (
+            proposed_roll_at_boundary or proposed_pitch_at_boundary
+        ):
+            rejection_reasons.append('search_boundary_reached')
+        if relative_improvement < minimum_improvement:
+            rejection_reasons.append('insufficient_cost_improvement')
+
+        if rejection_reasons:
+            selected = quality_baseline
+            selection_source = 'best_stillness_quality_fallback'
+        else:
+            selected = proposed
+            selection_source = 'accepted_bounded_physics_optimization'
+
+    roll_at_boundary = bool(
+        np.isclose(
+            selected['roll_correction_deg'],
+            float(config.INITIAL_ROLL_SEARCH_MIN_DEG),
+        )
+        or np.isclose(
+            selected['roll_correction_deg'],
+            float(config.INITIAL_ROLL_SEARCH_MAX_DEG),
+        )
+    )
+    pitch_at_boundary = bool(
+        np.isclose(
+            selected['pitch_correction_deg'],
+            float(config.INITIAL_PITCH_SEARCH_MIN_DEG),
+        )
+        or np.isclose(
+            selected['pitch_correction_deg'],
+            float(config.INITIAL_PITCH_SEARCH_MAX_DEG),
+        )
+    )
+    proposed_result = locals().get('proposed', selected)
+    proposed_roll_at_boundary = bool(locals().get(
+        'proposed_roll_at_boundary',
+        roll_at_boundary,
+    ))
+    proposed_pitch_at_boundary = bool(locals().get(
+        'proposed_pitch_at_boundary',
+        pitch_at_boundary,
+    ))
+    rejection_reasons = list(locals().get('rejection_reasons', []))
+    relative_improvement = float(locals().get(
+        'relative_improvement',
+        0.0,
+    ))
+    if fixed_solution is not None:
+        quality_baseline_result = selected
+    else:
+        quality_baseline_result = next(
+            result
+            for result in baseline_evaluations
+            if result['candidate_id'] == min(
+                candidate_alignments,
+                key=lambda item: (
+                    item['quality_score'],
+                    -item['duration_s'],
+                ),
+            )['candidate_id']
+        )
+    report = {
+        'enabled': True,
+        'selection_source': selection_source,
+        'accepted': not rejection_reasons,
+        'rejection_reasons': rejection_reasons,
+        'candidate_id': selected['candidate_id'],
+        'candidate_roles': list(selected['roles']),
+        'roll_correction_deg': selected['roll_correction_deg'],
+        'pitch_correction_deg': selected['pitch_correction_deg'],
+        'total_cost': selected['total_cost'],
+        'cost_components': dict(selected['cost_components']),
+        'adaptive_baseline_candidate_id': adaptive_baseline['candidate_id'],
+        'adaptive_baseline_cost': adaptive_baseline['total_cost'],
+        'selected_cost_improvement': float(
+            adaptive_baseline['total_cost'] - selected['total_cost']
+        ),
+        'quality_baseline_candidate_id': quality_baseline_result[
+            'candidate_id'
+        ],
+        'quality_baseline_cost': quality_baseline_result['total_cost'],
+        'proposed_candidate_id': proposed_result['candidate_id'],
+        'proposed_roll_correction_deg': proposed_result[
+            'roll_correction_deg'
+        ],
+        'proposed_pitch_correction_deg': proposed_result[
+            'pitch_correction_deg'
+        ],
+        'proposed_cost': proposed_result['total_cost'],
+        'proposed_relative_improvement': relative_improvement,
+        'proposed_roll_at_search_boundary': proposed_roll_at_boundary,
+        'proposed_pitch_at_search_boundary': proposed_pitch_at_boundary,
+        'roll_at_search_boundary': roll_at_boundary,
+        'pitch_at_search_boundary': pitch_at_boundary,
+        'evaluation_count': int(len(evaluation_cache)),
+        'uses_video_reference': False,
+        'candidate_selection_method': 'minimum_stillness_quality_score',
+        'candidate_baselines': [
+            {
+                'candidate_id': result['candidate_id'],
+                'roles': list(result['roles']),
+                'quality_score': float(
+                    candidate_by_id[result['candidate_id']]['quality_score']
+                ),
+                'trajectory_cost': float(result['total_cost']),
+            }
+            for result in baseline_evaluations
+        ],
+    }
+    solution = {
+        'candidate_id': selected['candidate_id'],
+        'roll_correction_deg': selected['roll_correction_deg'],
+        'pitch_correction_deg': selected['pitch_correction_deg'],
+    }
+    return selected, adaptive_baseline, report, solution
+
+
 def main(
         prepare_plots=True,
         pipeline_variant=None,
-        fixed_video_offset=None
+        fixed_video_offset=None,
+        fixed_initial_attitude_solution=None,
 ):
     # ==============================================================
     # 1. SETUP & DATEN LADEN
@@ -428,7 +1126,16 @@ def main(
 
     df_imu = preprocessor.process_barometer_and_crop(df_imu, P0, true_start_idx, fs_dynamisch)
 
-    # Die Ausrichtung erfolgt vor Scout-Pass, ESKF und RTS. Dadurch liegen auch
+    sensor_start_wall = np.asarray(
+        getattr(config, 'SENSOR_START_POSITION_WALL_M', [0.0, 0.0, 0.0]),
+        dtype=float
+    )
+    if sensor_start_wall.shape != (3,) or not np.all(np.isfinite(sensor_start_wall)):
+        raise ValueError(
+            "SENSOR_START_POSITION_WALL_M muss drei endliche Werte [X, Y, Z] enthalten."
+        )
+
+    # Die Ausrichtung erfolgt vor SYNC_REFERENCE_PASS, ESKF und RTS. Dadurch liegen auch
     # Wandbedingung und RTS-Endpunkt von Beginn an im Wandkoordinatensystem.
     base_yaw_deg = getattr(config, 'WALL_FRAME_BASE_YAW_DEG', 180.0)
     start_pose_yaw_deg = getattr(config, 'START_POSE_YAW_CORRECTION_DEG', 0.0)
@@ -459,7 +1166,7 @@ def main(
             active_options,
             use_video_in_filter=bool(getattr(config, 'USE_VIDEO_IN_FILTER', False))
         )
-    scout_options = get_pipeline_options('V2_BARO')
+    sync_reference_options = get_pipeline_options('V2_BARO')
 
     print(
         f" -> Aktive Pipeline: {active_options.name} | "
@@ -476,34 +1183,185 @@ def main(
     video_positions = None
     video_t = None
     optimal_offset = None
+    attitude_optimization_report = None
+    initial_attitude_solution = None
+    adaptive_sync_reference = None
+    selected_initial_accel_bias = np.zeros(3)
+    selected_initial_gyro_bias = np.zeros(3)
+    selected_initial_covariance = None
     
     # ==============================================================
-    # 3. DURCHLAUF 1: SCOUT-PASS (Immer in lokal [0,0,0])
+    # 3. SYNC_REFERENCE_PASS (immer lokal in [0,0,0])
+    # Unabhängiger IMU-/Barometer-Durchlauf für die Videozeitsynchronisation.
     # ==============================================================
     print("\n" + "="*55)
-    print("🧭 DURCHLAUF 1: SCOUT-PASS (IMU-Referenz)")
+    print("🧭 DURCHLAUF 1: SYNC_REFERENCE_PASS")
     print("="*55)
     
-    positions_scout, velocities_scout, _, times_scout, _ = run_eskf_pipeline(
-        df_imu,
-        q_init_wall,
-        process_start_idx,
-        true_start_idx,
-        calib,
-        fs_dynamisch,
-        options=scout_options
-    )
+    use_attitude_optimization = bool(getattr(
+        config,
+        'USE_INITIAL_ATTITUDE_OPTIMIZATION',
+        False,
+    ))
+    if use_attitude_optimization:
+        candidate_alignments = preprocessor.initialization_alignments
+        if not candidate_alignments:
+            candidate_alignments = preprocessor.build_initialization_alignments(
+                df_imu,
+                calib,
+                true_start_idx,
+            )
+        selected_attitude, adaptive_attitude, \
+            attitude_optimization_report, \
+            initial_attitude_solution = optimize_initial_attitude(
+                df_imu=df_imu,
+                candidate_alignments=candidate_alignments,
+                true_start_idx=true_start_idx,
+                calib=calib,
+                fs_dynamisch=fs_dynamisch,
+                sync_reference_options=sync_reference_options,
+                base_yaw_deg=base_yaw_deg,
+                start_pose_yaw_deg=start_pose_yaw_deg,
+                wall_start_y=sensor_start_wall[1],
+                fixed_solution=fixed_initial_attitude_solution,
+            )
+        q_init_wall = selected_attitude['q_initial_wall']
+        process_start_idx = selected_attitude['process_start_idx']
+        selected_initial_accel_bias = selected_attitude[
+            'initial_accel_bias_mps2'
+        ].copy()
+        selected_initial_gyro_bias = selected_attitude[
+            'initial_gyro_bias_radps'
+        ].copy()
+        selected_initial_covariance = selected_attitude.get(
+            'initial_covariance'
+        )
+        if selected_initial_covariance is not None:
+            selected_initial_covariance = (
+                selected_initial_covariance.copy()
+            )
+        positions_sync_reference = selected_attitude['positions']
+        velocities_sync_reference = selected_attitude['velocities']
+        times_sync_reference = selected_attitude['times']
+        adaptive_sync_reference = {
+            'positions': adaptive_attitude['positions'].copy(),
+            'velocities': adaptive_attitude['velocities'].copy(),
+            'times': adaptive_attitude['times'].copy(),
+        }
+        preprocessor.initialization_report[
+            'attitude_optimization'
+        ] = attitude_optimization_report
+
+        print(
+            f" -> Startorientierung optimiert: "
+            f"Kandidat={attitude_optimization_report['candidate_id']} | "
+            f"Roll={attitude_optimization_report['roll_correction_deg']:+.2f}° | "
+            f"Pitch={attitude_optimization_report['pitch_correction_deg']:+.2f}° | "
+            f"Kosten={attitude_optimization_report['total_cost']:.3f}"
+        )
+        if not attitude_optimization_report['accepted']:
+            proposed_roll = attitude_optimization_report[
+                'proposed_roll_correction_deg'
+            ]
+            proposed_pitch = attitude_optimization_report[
+                'proposed_pitch_correction_deg'
+            ]
+            reasons = ', '.join(
+                attitude_optimization_report['rejection_reasons']
+            )
+            print(
+                " -> Vorschlag verworfen: "
+                f"Roll={proposed_roll:+.2f}°, "
+                f"Pitch={proposed_pitch:+.2f}° | Grund={reasons}. "
+                "Verwende unveränderten Qualitätskandidaten."
+            )
+        if (
+            attitude_optimization_report[
+                'proposed_roll_at_search_boundary'
+            ]
+            or attitude_optimization_report[
+                'proposed_pitch_at_search_boundary'
+            ]
+        ):
+            print(
+                " -> Hinweis: Der Optimierungsvorschlag liegt an einer "
+                "Suchgrenze und gilt daher nicht als eindeutig bestimmt."
+            )
+    else:
+        # Auch ohne nachgeschaltete Startlagenoptimierung wird der vom
+        # Preprocessor gewählte Warm-up-Zustand vollständig übernommen.
+        selected_candidate_id = None
+        if preprocessor.initialization_report is not None:
+            selected_candidate_id = preprocessor.initialization_report.get(
+                'prestart_selected_candidate_id'
+            )
+        selected_alignment = next(
+            (
+                candidate
+                for candidate in preprocessor.initialization_alignments
+                if candidate['candidate_id'] == selected_candidate_id
+            ),
+            None,
+        )
+        if selected_alignment is not None:
+            selected_initial_accel_bias = np.asarray(
+                selected_alignment.get(
+                    'initial_accel_bias_mps2',
+                    np.zeros(3),
+                ),
+                dtype=float,
+            ).copy()
+            selected_initial_gyro_bias = np.asarray(
+                selected_alignment.get(
+                    'initial_gyro_bias_radps',
+                    np.zeros(3),
+                ),
+                dtype=float,
+            ).copy()
+            wall_rotation = R.from_euler(
+                'z',
+                total_wall_yaw_deg,
+                degrees=True,
+            )
+            selected_initial_covariance = rotate_initial_covariance(
+                selected_alignment.get('initial_covariance'),
+                wall_rotation,
+            )
+
+        positions_sync_reference, velocities_sync_reference, _, \
+            times_sync_reference, _ = run_eskf_pipeline(
+                df_imu,
+                q_init_wall,
+                process_start_idx,
+                true_start_idx,
+                calib,
+                fs_dynamisch,
+                options=sync_reference_options,
+                wall_start_y=sensor_start_wall[1],
+                initial_accel_bias_mps2=selected_initial_accel_bias,
+                initial_gyro_bias_radps=selected_initial_gyro_bias,
+                initial_covariance=selected_initial_covariance,
+            )
     
     q_init_corrected = q_init_wall
     if getattr(config, 'USE_YAW_CORRECTION', True):
         target_x = getattr(config, 'TARGET_X_M', -1.2)
         target_y = getattr(config, 'TARGET_Y_M', -0.2)
         theta_opt = compute_optimal_yaw_correction(
-            positions_scout, velocities_scout, times_scout, target_x, target_y,
+            positions_sync_reference,
+            velocities_sync_reference,
+            times_sync_reference,
+            target_x,
+            target_y,
             ignore_start_sec=0.5, alpha=1.0, beta=2.0
         )
         print(f" -> 🎯 Yaw-Optimierung abgeschlossen! Fehlstellung: {np.degrees(theta_opt):.2f}°")
-        q_init_corrected = R.from_rotvec([0, 0, theta_opt]) * q_init_wall
+        yaw_correction = R.from_rotvec([0, 0, theta_opt])
+        q_init_corrected = yaw_correction * q_init_wall
+        selected_initial_covariance = rotate_initial_covariance(
+            selected_initial_covariance,
+            yaw_correction,
+        )
 
     # ==============================================================
     # 4. KINEMATISCHER SYNC (Advanced Signal Alignment)
@@ -536,8 +1394,8 @@ def main(
             video_t = np.arange(len(raw_z)) / fps
             video_vz = np.gradient(raw_z, video_t)
             
-            imu_t = times_scout
-            imu_vz = velocities_scout[:, 2] 
+            imu_t = times_sync_reference
+            imu_vz = velocities_sync_reference[:, 2]
             
             # Der erste Validierungslauf bestimmt die Synchronisation. Alle
             # weiteren Varianten erhalten exakt denselben Offset, damit der
@@ -580,15 +1438,6 @@ def main(
     print("DURCHLAUF 2: FINALER PASS")
     print("="*55)
     
-    sensor_start_wall = np.asarray(
-        getattr(config, 'SENSOR_START_POSITION_WALL_M', [0.0, 0.0, 0.0]),
-        dtype=float
-    )
-    if sensor_start_wall.shape != (3,) or not np.all(np.isfinite(sensor_start_wall)):
-        raise ValueError(
-            "SENSOR_START_POSITION_WALL_M muss drei endliche Werte [X, Y, Z] enthalten."
-        )
-    
     positions, velocities, orientations, times, eskf = run_eskf_pipeline(
         df_imu,
         q_init_corrected,
@@ -597,7 +1446,10 @@ def main(
         calib,
         fs_dynamisch,
         options=active_options,
-        wall_start_y=sensor_start_wall[1]
+        wall_start_y=sensor_start_wall[1],
+        initial_accel_bias_mps2=selected_initial_accel_bias,
+        initial_gyro_bias_radps=selected_initial_gyro_bias,
+        initial_covariance=selected_initial_covariance,
     )
 
     # ==============================================================
@@ -658,6 +1510,13 @@ def main(
         ),
         'video_time_offset': optimal_offset,
         'sensor_start_wall': sensor_start_wall.copy(),
+        'initial_attitude_solution': initial_attitude_solution,
+        'adaptive_sync_reference': adaptive_sync_reference,
+        'initialization': (
+            None
+            if preprocessor.initialization_report is None
+            else dict(preprocessor.initialization_report)
+        ),
     }
 
 if __name__ == "__main__":

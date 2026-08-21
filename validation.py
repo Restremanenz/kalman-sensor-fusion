@@ -133,6 +133,8 @@ def run_validation():
     imu_duration = None
     summary_rows = []
     variant_options = {}
+    initialization_report = None
+    shared_initial_attitude_solution = None
 
     for variant_name in variant_names:
         print("\n" + "#" * 64)
@@ -143,11 +145,16 @@ def run_validation():
             prepare_plots=False,
             pipeline_variant=variant_name,
             fixed_video_offset=shared_video_offset,
+            fixed_initial_attitude_solution=shared_initial_attitude_solution,
         )
         if shared_video_offset is None:
             shared_video_offset = float(result['video_time_offset'])
             imu_start_time = float(result['times'][0])
             imu_duration = float(result['times'][-1] - result['times'][0])
+            initialization_report = result.get('initialization')
+            shared_initial_attitude_solution = result.get(
+                'initial_attitude_solution'
+            )
 
         dataframe, metrics = create_variant_dataframe(result)
         dataframe.to_csv(output_dir / f"{variant_name}.csv", index=False)
@@ -160,6 +167,50 @@ def run_validation():
 
     summary = pd.DataFrame(summary_rows)
     summary.to_csv(output_dir / "metrics_summary.csv", index=False)
+
+    attitude_report = (
+        initialization_report or {}
+    ).get('attitude_optimization', {})
+    candidate_rows = []
+    for candidate in attitude_report.get('candidate_baselines', []):
+        endpoint = candidate.get('endpoint_local_m', [np.nan] * 3)
+        components = candidate.get('cost_components', {})
+        warmup = candidate.get('warmup_report', {})
+        candidate_rows.append({
+            'candidate_id': candidate.get('candidate_id'),
+            'roles': '|'.join(candidate.get('roles', [])),
+            'selected': bool(candidate.get('selected', False)),
+            'duration_s': candidate.get('duration_s'),
+            'quality_score': candidate.get('quality_score'),
+            'gyro_mean_dps': candidate.get('gyro_mean_dps'),
+            'gyro_p95_dps': candidate.get('gyro_p95_dps'),
+            'prestart_score': candidate.get('prestart_score'),
+            'selection_score': candidate.get('selection_score'),
+            'warmup_mode': warmup.get('mode'),
+            'gravity_update_count': warmup.get(
+                'gravity_update_count'
+            ),
+            'strict_stationary_update_count': warmup.get(
+                'strict_stationary_update_count'
+            ),
+            'trajectory_cost': candidate.get('trajectory_cost'),
+            'endpoint_x_local_m': endpoint[0],
+            'endpoint_y_local_m': endpoint[1],
+            'endpoint_z_local_m': endpoint[2],
+            'maximum_abs_lateral_m': candidate.get(
+                'maximum_abs_lateral_m'
+            ),
+            'barometer_cost': components.get('barometer'),
+            'wall_cost': components.get('wall'),
+            'corridor_cost': components.get('corridor'),
+            'endpoint_cost': components.get('endpoint'),
+            'lateral_shape_cost': components.get('lateral_shape'),
+        })
+    if candidate_rows:
+        pd.DataFrame(candidate_rows).to_csv(
+            output_dir / 'initialization_candidates.csv',
+            index=False,
+        )
 
     with open(config.VIDEO_DATA_FILE, "r", encoding="utf-8") as file:
         video_metadata = json.load(file)
@@ -204,7 +255,7 @@ def run_validation():
         'imu_start_time_s': imu_start_time,
         'video_time_at_imu_start_s': imu_start_time - shared_video_offset,
         'synchronization': {
-            'method': 'KINEMATIC_VERTICAL_VELOCITY',
+            'method': 'SYNC_REFERENCE_PASS_VERTICAL_VELOCITY',
             'video_time_offset_s': shared_video_offset,
             'kinematic_video_start_s': kinematic_video_start,
             'mapped_imu_end_video_s': mapped_imu_end,
@@ -258,6 +309,7 @@ def run_validation():
             float(config.TARGET_X_M),
             float(config.TARGET_Y_M),
         ],
+        'initialization': initialization_report,
         'variants': variant_options,
     }
     with open(output_dir / "metadata.json", 'w', encoding='utf-8') as file:

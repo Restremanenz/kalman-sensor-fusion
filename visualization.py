@@ -18,7 +18,13 @@ class TrajectoryVisualizer:
         plt.figure(figsize=(12, 5))
         plt.plot(df_plot['Time'], gyro_mag_plot, color='lightgray', label='Gyroskop Magnitude (Roh)')
         plt.plot(df_init['Time'], gyro_mag_init, color='blue', linewidth=2, label='Extrahierte Ruhephase')
-        plt.axhline(y=threshold, color='red', linestyle='--', label=f'Threshold ({threshold} dps)')
+        if threshold is not None:
+            plt.axhline(
+                y=threshold,
+                color='red',
+                linestyle='--',
+                label=f'Threshold ({threshold} dps)',
+            )
         plt.title('Erkennung der initialen Ruhephase')
         plt.xlabel('Zeit (s)')
         plt.ylabel('Magnitude (dps)')
