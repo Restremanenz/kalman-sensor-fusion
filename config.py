@@ -10,6 +10,30 @@ IMU_CALIB_FILE = "sensor_params.json"
 USE_AUTO_INIT = True           # Master-Schalter: True = Start-Ausrichtung berechnen, False = Ignorieren
 MAX_PROCESS_TIME = None        # (s) Zum Debuggen: Bricht den Datensatz nach X Sekunden ab
 
+# Reproduzierbare Ausbaustufe für den normalen Programmlauf.
+ACTIVE_PIPELINE_VARIANT = "V5_CURRENT"
+
+# Varianten für die spätere automatische Validierung.
+VALIDATION_PIPELINE_VARIANTS = [
+    "V1_IMU",
+    "V2_BARO",
+    "V3_RTS",
+    "V4_WALL",
+    "V5_CURRENT",
+]
+
+# Zielordner für reproduzierbare CSV- und Metadaten-Exporte.
+VALIDATION_OUTPUT_DIR = "./Validation"
+
+# Offizielle Zeitinformationen pro Validierungslauf.
+# finish_time_s: Zeit vom Startsignal bis zum Buzzer.
+VALIDATION_RUN_TIMING = {
+    "7sek": {
+        "reaction_time_s": 0.162,
+        "finish_time_s": 7.197,
+    },
+}
+
 # ==========================================
 # ALIGNMENT & INITIALISIERUNG (START-PHASE)
 # ==========================================
@@ -31,14 +55,8 @@ WARMUP_BUFFER_SEC = 0.2        # (s) Sicherheitsabstand vom Start-Peak zurück
 USE_END_DETECTION = True             
 FREEFALL_THRESHOLD_G = 0.2           # Unter 0.xg gewertet als Losgelassen / Freier Fall
 
-# ==========================================
-# POST-PROCESSING (RTS Smoother)
-# ==========================================
-USE_SMOOTHER = True            # Smoother ein-/ausschalten
-
 # Positions-Ziele am Ende des Laufs
 SMOOTH_TO_BARO_Z = False        # Z-Achse an die exakt letzte Barometer-Höhe angleichen
-SMOOTH_XY_TO_ZERO = True       # X/Y-Achsen exakt über den Startpunkt zwingen
 TARGET_X_M = 1.1                # (m) +X zeigt von der Wand weg
 TARGET_Y_M = -0.4               # (m) +Y zeigt nach rechts
 
@@ -63,7 +81,6 @@ WALL_FRAME_BASE_YAW_DEG = 180.0     # (Grad) Basis-Drehung des Wandkoordinatensy
 # Positiv = von oben gegen den Uhrzeigersinn, negativ = im Uhrzeigersinn.
 START_POSE_YAW_CORRECTION_DEG = -10.0
 
-USE_WALL_CONSTRAINT = True
 WALL_INCLINATION_DEG = 5.0    # (Grad) Überhang der genormten Speed-Wand
 
 # Normalenrichtung der Wand im oben definierten Wandkoordinatensystem.
@@ -75,7 +92,6 @@ WALL_UNCERTAINTY = 0.8             # (m) Toleranz/Gummiband-Effekt
 # Seitliche Grenzen als absolute Koordinaten der Speedwand.
 # +Y zeigt nach rechts, -Y nach links. Intern werden die Grenzen automatisch
 # relativ zur Startposition des Sensors umgerechnet.
-USE_LATERAL_CORRIDOR = True
 CORRIDOR_Y_MIN_M = -1.5
 CORRIDOR_Y_MAX_M = 1.5
 CORRIDOR_UNCERTAINTY = 0.2
@@ -107,7 +123,6 @@ GYRO_BIAS_RW_DENSITY = [3.937686e-06, 6.420872e-06, 9.472721e-06]
 # ==========================================
 # ROBUSTE STILLSTANDSERKENNUNG (ZUPT)
 # ==========================================
-USE_ZUPT = True                # ZUPT im Filter ein-/ausschalten
 OFFLINE_ZUPT_THRESHOLD = 0.05   # (g) Schwellenwert für gefilterte Beschleunigung
 OFFLINE_ZUPT_HP_CUTOFF = 0.01  # (Hz) Hochpass-Filter (entfernt 1g Schwerkraft)
 OFFLINE_ZUPT_LP_CUTOFF = 5.0   # (Hz) Tiefpass-Filter (glättet Sensorrauschen)
@@ -156,7 +171,7 @@ STARTGRIFF_Z_M = 1.6875          # (m) Montagehöhe des Griffs (Boden bis Griff)
 # ==========================================
 ANIMATION_FPS = 30
 SHOW_RAW_SENSOR_DATA = False
-SHOW_VELOCITY = False   
+SHOW_VELOCITY = True   
 SHOW_ALTITUDE = False        
 SHOW_INIT_PLOT = False  
 SHOW_2D_FRONT = True
@@ -165,7 +180,7 @@ SHOW_2D_SIDE = True
 SHOW_3D_TRAJECTORY = True         
 SHOW_ANIMATED_TRAJECTORY = False     
 SHOW_HIP_ROTATION = False      
-SHOW_2D_FRONT_YAW = True
+SHOW_2D_FRONT_YAW = False
 
 # Absolute Sensorstartposition im Wandkoordinatensystem [X, Y, Z].
 # Diese Position ist unabhängig davon, ob Videodaten geladen werden.

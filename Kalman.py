@@ -1,4 +1,6 @@
 import json
+from dataclasses import replace
+
 import numpy as np
 import pandas as pd
 from scipy.spatial.transform import Rotation as R
@@ -10,6 +12,7 @@ from preprocessing import IMUPreprocessor
 from visualization import TrajectoryVisualizer
 from filters import FilterpyESKF
 from smoother import ESKFSmoother  
+from pipeline_variants import get_pipeline_options
 
 
 class IMUCalibration:
@@ -153,8 +156,8 @@ def run_eskf_pipeline(
         true_start_idx,
         calib,
         fs_dynamisch,
-        wall_start_y=0.0,
-        apply_lateral_corridor=True
+        options,
+        wall_start_y=0.0
 ):
     mag_in_run_active = config.USE_MAGNETOMETER and config.USE_18_STATE_ESKF
     
@@ -182,10 +185,7 @@ def run_eskf_pipeline(
     last_baro_time = -1.0 
     last_mag_time = -1.0
 
-    corridor_enabled = (
-        apply_lateral_corridor
-        and getattr(config, 'USE_LATERAL_CORRIDOR', False)
-    )
+    corridor_enabled = options.use_lateral_corridor
     corridor_hits = 0
     last_corridor_update_time = -np.inf
 
@@ -287,16 +287,21 @@ def run_eskf_pipeline(
         final_baro_z = current_alt
 
         if pd.notna(current_baro_time) and current_baro_time != last_baro_time:
-            eskf.update_barometer(row['Altitude_filt [m]'])
-            if getattr(config, 'USE_WALL_CONSTRAINT', False):
-                eskf.update_wall_constraint(normal_xy=config.WALL_NORMAL_XY, inclination_deg=config.WALL_INCLINATION_DEG, uncertainty=config.WALL_UNCERTAINTY)
+            if options.use_barometer:
+                eskf.update_barometer(row['Altitude_filt [m]'])
+            if options.use_wall_constraint:
+                eskf.update_wall_constraint(
+                    normal_xy=config.WALL_NORMAL_XY,
+                    inclination_deg=config.WALL_INCLINATION_DEG,
+                    uncertainty=config.WALL_UNCERTAINTY
+                )
             last_baro_time = current_baro_time
 
         if mag_in_run_active and pd.notna(current_mag_time) and current_mag_time != last_mag_time:
             eskf.update_mag(mag_calib)
             last_mag_time = current_mag_time
 
-        if getattr(config, 'USE_ZUPT', False):
+        if options.use_zupt:
             acc_world = eskf.q.apply(acc_calib)
             acc_magnitude = np.linalg.norm(acc_world + eskf.g)
             gyro_magnitude = np.linalg.norm(gyro_calib)
@@ -311,7 +316,7 @@ def run_eskf_pipeline(
         # aktiviert ist. Im Vergleichsmodus bleiben IMU und Video unabhängig.
         use_video_in_filter = (
             getattr(config, 'USE_VIDEO_DATA', False)
-            and getattr(config, 'USE_VIDEO_IN_FILTER', False)
+            and options.use_video_in_filter
         )
         if (
             use_video_in_filter
@@ -353,12 +358,12 @@ def run_eskf_pipeline(
         )
 
     # BOUNDARY CONDITIONS & RTS SMOOTHING
-    if getattr(config, 'USE_SMOOTHER', False):
+    if options.use_rts:
         applied_boundary = False
         if getattr(config, 'FORCE_V_END_ZERO', False) and getattr(config, 'MAX_PROCESS_TIME', None) is None:
             eskf.update_zupt() 
             applied_boundary = True
-        if getattr(config, 'SMOOTH_XY_TO_ZERO', False):
+        if options.use_endpoint:
             target_xy = np.array([getattr(config, 'TARGET_X_M', 0.0), getattr(config, 'TARGET_Y_M', 0.0)])
             xy_unc = getattr(config, 'TARGET_XY_UNCERTAINTY', 0.3)
             eskf.update_position_xy(target_xy, uncertainty=xy_unc) 
@@ -384,7 +389,11 @@ def run_eskf_pipeline(
     return positions, velocities, orientations, np.array(times_plot), eskf
 
 
-def main():
+def main(
+        prepare_plots=True,
+        pipeline_variant=None,
+        fixed_video_offset=None
+):
     # ==============================================================
     # 1. SETUP & DATEN LADEN
     # ==============================================================
@@ -434,6 +443,28 @@ def main():
         f"Startkorrektur={start_pose_yaw_deg:+.2f}°, "
         f"Gesamt={total_wall_yaw_deg:+.2f}°"
     )
+
+    variant_name = (
+        pipeline_variant
+        if pipeline_variant is not None
+        else getattr(config, 'ACTIVE_PIPELINE_VARIANT', 'V5_CURRENT')
+    )
+    active_options = get_pipeline_options(variant_name)
+
+    # Bei einem normalen Programmlauf gilt der Schalter aus config.py.
+    # Explizite Validierungsläufe verwenden Video dagegen ausschließlich als
+    # unabhängige Referenz und speisen es niemals in den Filter ein.
+    if pipeline_variant is None:
+        active_options = replace(
+            active_options,
+            use_video_in_filter=bool(getattr(config, 'USE_VIDEO_IN_FILTER', False))
+        )
+    scout_options = get_pipeline_options('V2_BARO')
+
+    print(
+        f" -> Aktive Pipeline: {active_options.name} | "
+        f"{active_options.label}"
+    )
     
     # Neue Spalten initialisieren
     df_imu['Video_Y'] = np.nan
@@ -443,6 +474,8 @@ def main():
     true_video_start_y = 0.0
     true_video_start_z = 0.0
     video_positions = None
+    video_t = None
+    optimal_offset = None
     
     # ==============================================================
     # 3. DURCHLAUF 1: SCOUT-PASS (Immer in lokal [0,0,0])
@@ -451,11 +484,6 @@ def main():
     print("🧭 DURCHLAUF 1: SCOUT-PASS (IMU-Referenz)")
     print("="*55)
     
-    original_smoother = getattr(config, 'USE_SMOOTHER', False)
-    original_wall_constraint = getattr(config, 'USE_WALL_CONSTRAINT', False)
-    config.USE_SMOOTHER = False 
-    config.USE_WALL_CONSTRAINT = False
-    
     positions_scout, velocities_scout, _, times_scout, _ = run_eskf_pipeline(
         df_imu,
         q_init_wall,
@@ -463,7 +491,7 @@ def main():
         true_start_idx,
         calib,
         fs_dynamisch,
-        apply_lateral_corridor=False
+        options=scout_options
     )
     
     q_init_corrected = q_init_wall
@@ -511,8 +539,16 @@ def main():
             imu_t = times_scout
             imu_vz = velocities_scout[:, 2] 
             
-            # Algorithmus anwenden
-            optimal_offset = compute_optimal_time_shift(imu_t, imu_vz, video_t, video_vz)
+            # Der erste Validierungslauf bestimmt die Synchronisation. Alle
+            # weiteren Varianten erhalten exakt denselben Offset, damit der
+            # Variantenvergleich nicht durch unterschiedliche Sync-Ergebnisse
+            # beeinflusst wird.
+            if fixed_video_offset is None:
+                optimal_offset = compute_optimal_time_shift(
+                    imu_t, imu_vz, video_t, video_vz
+                )
+            else:
+                optimal_offset = float(fixed_video_offset)
             v_times_absolute = video_t + optimal_offset
             
             # Exakte Video-Startzeit berechnen ---
@@ -544,9 +580,6 @@ def main():
     print("DURCHLAUF 2: FINALER PASS")
     print("="*55)
     
-    config.USE_SMOOTHER = original_smoother
-    config.USE_WALL_CONSTRAINT = original_wall_constraint
-
     sensor_start_wall = np.asarray(
         getattr(config, 'SENSOR_START_POSITION_WALL_M', [0.0, 0.0, 0.0]),
         dtype=float
@@ -563,8 +596,8 @@ def main():
         true_start_idx,
         calib,
         fs_dynamisch,
-        wall_start_y=sensor_start_wall[1],
-        apply_lateral_corridor=True
+        options=active_options,
+        wall_start_y=sensor_start_wall[1]
     )
 
     # ==============================================================
@@ -579,36 +612,53 @@ def main():
         print(f"BERECHNETE LAUFZEIT: {(times[-1] - times[0]):.3f} Sekunden")
         print("="*55)
 
-    print("Bereite finale 3D-Plots vor...")
-    vis = TrajectoryVisualizer(config=config)
-    
-    if getattr(config, 'SHOW_3D_TRAJECTORY', True):
-        vis.plot_static_trajectory(positions_plot)
-    if getattr(config, 'SHOW_ANIMATED_TRAJECTORY', False):
-        vis.plot_animated_trajectory(positions_plot, orientations, fs_dynamisch)
-    if getattr(config, 'SHOW_2D_FRONT', True):
-        vis.plot_2d_wall_with_trajectory(positions_plot, velocities)
-    if getattr(config, 'SHOW_2D_FRONT_VIDEO', True) and video_positions is not None:
-        vis.plot_2d_wall_with_trajectory(positions_plot, velocities, video_positions)
-    if getattr(config, 'SHOW_2D_SIDE', True):
-        vis.plot_2d_side_view_with_trajectory(positions_plot, velocities)
-    if getattr(config, 'SHOW_VELOCITY', False):
-        vis.plot_velocity(times, velocities)
-    if getattr(config, 'SHOW_RAW_SENSOR_DATA', False):
-        vis.plot_raw_sensor_data(df_imu)
-    if getattr(config, 'SHOW_ALTITUDE', False):
-        vis.plot_altitude(df_imu)
-    if getattr(config, 'SHOW_HIP_ROTATION', True):
-        vis.plot_hip_rotation(times, orientations)
-    if getattr(config, 'SHOW_2D_FRONT_YAW', True):
-        vis.plot_2d_wall_with_yaw(positions_plot, orientations)
+    if prepare_plots:
+        print("Bereite finale 3D-Plots vor...")
+        vis = TrajectoryVisualizer(config=config)
 
-    vis.show_all()
+        if getattr(config, 'SHOW_3D_TRAJECTORY', True):
+            vis.plot_static_trajectory(positions_plot)
+        if getattr(config, 'SHOW_ANIMATED_TRAJECTORY', False):
+            vis.plot_animated_trajectory(positions_plot, orientations, fs_dynamisch)
+        if getattr(config, 'SHOW_2D_FRONT', True):
+            vis.plot_2d_wall_with_trajectory(positions_plot, velocities)
+        if getattr(config, 'SHOW_2D_FRONT_VIDEO', True) and video_positions is not None:
+            vis.plot_2d_wall_with_trajectory(positions_plot, velocities, video_positions)
+        if getattr(config, 'SHOW_2D_SIDE', True):
+            vis.plot_2d_side_view_with_trajectory(positions_plot, velocities)
+        if getattr(config, 'SHOW_VELOCITY', False):
+            vis.plot_velocity(times, velocities)
+        if getattr(config, 'SHOW_RAW_SENSOR_DATA', False):
+            vis.plot_raw_sensor_data(df_imu)
+        if getattr(config, 'SHOW_ALTITUDE', False):
+            vis.plot_altitude(df_imu)
+        if getattr(config, 'SHOW_HIP_ROTATION', True):
+            vis.plot_hip_rotation(times, orientations)
+        if getattr(config, 'SHOW_2D_FRONT_YAW', True):
+            vis.plot_2d_wall_with_yaw(positions_plot, orientations)
+
+        vis.show_all()
     
     print(f"\n[INFO] Finaler In-Run Bias Schätzwert:")
     print(f"Gyro Bias (bg): {eskf.bg}")
     print(f"Accel Bias (ba): {eskf.ba}")
     print(f"Mag Bias (bm): {eskf.bm}")
+
+    return {
+        'variant': active_options.name,
+        'options': active_options,
+        'times': times.copy(),
+        'positions_local': positions.copy(),
+        'positions_wall': positions_plot.copy(),
+        'velocities': velocities.copy(),
+        'orientations': orientations,
+        'video_times': None if video_t is None else video_t.copy(),
+        'video_positions': (
+            None if video_positions is None else video_positions.copy()
+        ),
+        'video_time_offset': optimal_offset,
+        'sensor_start_wall': sensor_start_wall.copy(),
+    }
 
 if __name__ == "__main__":
     main()
